@@ -1,0 +1,27 @@
+# OP'26 EV Charging Analytics & Tariff Optimisation
+# Python 3.13+
+# Install: pip install -r requirements.txt
+
+# Data processing
+pandas==3.0.3
+numpy==2.4.6
+openpyxl==3.1.5
+
+# Machine learning
+xgboost==3.2.0
+lightgbm==4.6.0
+scikit-learn==1.8.0
+
+# Gemini AI (google-genai replaces deprecated google-generativeai)
+google-genai==2.7.0
+
+# Schema validation
+pydantic==2.13.4
+
+# Visualisation
+matplotlib==3.10.9
+seaborn==0.13.2
+
+# Testing
+pytest==9.0.3
+hypothesis==6.155.0

@@ -1,0 +1,64 @@
+# =============================================================================
+# OP'26 — .gitignore
+# =============================================================================
+
+# ── Python bytecode & caches ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Secrets & environment variables ──────────────────────────────────────────
+# Never commit API keys. Set GEMINI_API_KEY via: export GEMINI_API_KEY='...'
+.env
+.env.*
+*.env
+secrets.json
+credentials.json
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ── Kiro IDE internal files ───────────────────────────────────────────────────
+.kiro/
+
+# ── Test & coverage caches ────────────────────────────────────────────────────
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# ── Presentation & internal working documents ─────────────────────────────────
+PRESENTATION_BRIEF.md
+
+# ── Generated outputs (large files, not source) ───────────────────────────────
+# Comment these out if you want to commit outputs for the submission
+outputs/
+data/processed/
+
+# ── Raw data (large binary/CSV files) ────────────────────────────────────────
+# Comment out if you want to include raw data in the repo
+data/raw/
+
+# ── Jupyter notebooks (if any) ───────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Build / dist ─────────────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
