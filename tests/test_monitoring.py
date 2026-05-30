@@ -38,7 +38,8 @@ def _make_pricing_agent() -> TariffPricingAgent:
 def _make_monitor(pricing_agent=None, always_fail_gemini=True) -> MonitoringLearningAgent:
     if pricing_agent is None:
         pricing_agent = _make_pricing_agent()
-    with patch("src.agents.monitoring.build_gemini_model") as mock_build:
+    with patch("src.agents.monitoring.build_gemini_model") as mock_build, \
+         patch("src.agents.monitoring.time.sleep"):  # skip retry delays
         mock_model = mock_build.return_value
         if always_fail_gemini:
             mock_model.generate_content.side_effect = Exception("Gemini down (mock)")

@@ -5,7 +5,7 @@
 #   • Pricing constants and thresholds
 #   • Model hyperparameters
 #   • File path constants
-#   • Gemini client factory
+#   • LLM client factory (Groq — free tier, OpenAI-compatible)
 #   • Pydantic I/O schemas
 #   • Shared feature engineering function
 # =============================================================================
@@ -19,8 +19,6 @@ from typing import List, Literal
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
-from google import genai
-from google.genai import types as genai_types
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PRICING CONSTANTS  (OP'26 spec)
@@ -38,6 +36,13 @@ RANDOM_STATE: int = 42
 TRAIN_RATIO: float = 0.80
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ELASTICITY — kept low to reflect inelastic EV charging demand
+# EV charging is largely necessity-driven; empirical studies suggest
+# short-run price elasticity of -0.1 to -0.3 for workplace/captive chargers.
+# ─────────────────────────────────────────────────────────────────────────────
+EPSILON_INIT: float = 0.3   # conservative inelastic default
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MODEL HYPERPARAMETERS
 # ─────────────────────────────────────────────────────────────────────────────
 XGB_PARAMS: dict = {
@@ -48,7 +53,7 @@ XGB_PARAMS: dict = {
     "colsample_bytree": 0.75,
     "reg_alpha": 0.1,
     "reg_lambda": 1.5,
-    "n_jobs": -1,
+    "n_jobs": 1,          # 1 avoids deadlock inside MultiOutputRegressor
     "verbosity": 0,
     "tree_method": "hist",
 }
@@ -61,7 +66,7 @@ LGB_PARAMS: dict = {
     "colsample_bytree": 0.75,
     "reg_alpha": 0.1,
     "reg_lambda": 1.5,
-    "n_jobs": -1,
+    "n_jobs": 1,          # 1 avoids deadlock inside MultiOutputRegressor
     "verbose": -1,
 }
 
@@ -75,67 +80,83 @@ OUTPUTS_DIR: str = "outputs"
 EDA_OUTPUTS_DIR: str = "outputs/eda"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GEMINI
+# LLM — Groq (free tier, OpenAI-compatible, ~14 400 RPD on llama-3.3-70b)
 # ─────────────────────────────────────────────────────────────────────────────
-GEMINI_MODEL: str = "gemini-2.0-flash"
+GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
 
-class _GeminiWrapper:
+class _GroqWrapper:
     """
-    Thin wrapper around google.genai Client that exposes a
-    generate_content(prompt) method compatible with the agent code.
+    Thin wrapper around the Groq client that exposes a generate_content(prompt)
+    method compatible with the existing agent code.
+
+    Returns an object with a .text attribute containing the raw JSON string,
+    matching the interface previously provided by the Gemini wrapper.
     """
 
     def __init__(
         self,
-        client: genai.Client,
+        client,  # groq.Groq
         model: str,
         system_instruction: str,
         temperature: float,
-        response_mime: str,
     ) -> None:
         self._client = client
         self._model = model
         self._system_instruction = system_instruction
         self._temperature = temperature
-        self._response_mime = response_mime
 
-    def generate_content(self, prompt: str):  # type: ignore[return]
-        config = genai_types.GenerateContentConfig(
-            system_instruction=self._system_instruction,
-            temperature=self._temperature,
-            response_mime_type=self._response_mime,
-        )
-        return self._client.models.generate_content(
+    def generate_content(self, prompt: str):
+        response = self._client.chat.completions.create(
             model=self._model,
-            contents=prompt,
-            config=config,
+            messages=[
+                {"role": "system", "content": self._system_instruction},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=self._temperature,
+            response_format={"type": "json_object"},
         )
+
+        class _Result:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        return _Result(response.choices[0].message.content or "")
 
 
 def build_gemini_model(
     system_instruction: str,
     temperature: float = 0.2,
     response_mime: str = "application/json",
-) -> _GeminiWrapper:
+) -> _GroqWrapper:
     """
-    Configure and return a Gemini model wrapper.
-    Reads GEMINI_API_KEY exclusively from the environment variable.
+    Build and return a Groq LLM wrapper.
+    Reads GROQ_API_KEY from the environment.
     Raises EnvironmentError with the exact export command if the key is missing.
+
+    The function name is kept as build_gemini_model so no agent code needs
+    to change — it's just a drop-in replacement.
     """
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key = os.environ.get("GROQ_API_KEY", "")
     if not api_key:
         raise EnvironmentError(
-            "GEMINI_API_KEY is not set. Export it before running:\n"
-            "  export GEMINI_API_KEY='your-key-here'"
+            "GROQ_API_KEY is not set. Export it before running:\n"
+            "  export GROQ_API_KEY='your-groq-key-here'\n"
+            "Get a free key at: https://console.groq.com"
         )
-    client = genai.Client(api_key=api_key)
-    return _GeminiWrapper(
+    try:
+        from groq import Groq
+    except ImportError:
+        raise ImportError(
+            "groq package not installed. Run:\n"
+            "  pip install groq"
+        )
+    client = Groq(api_key=api_key)
+    return _GroqWrapper(
         client=client,
-        model=GEMINI_MODEL,
+        model=GROQ_MODEL,
         system_instruction=system_instruction,
         temperature=temperature,
-        response_mime=response_mime,
     )
 
 
@@ -256,28 +277,28 @@ You are the TariffPricingAgent in an Agentic EV Charging Optimisation System (OP
 
 Your role:
 Given a forecast state (predicted utilisation U_pred, queue Q_pred, hour, weekend flag)
-and the current elasticity parameters (ε, α, β), compute the optimal per-kWh tariff P_t.
+and the current elasticity parameters (epsilon, alpha, beta), compute the optimal per-kWh tariff P_t.
 
 Pricing rules:
-- Baseline tariff: ₹15/kWh
-- If U_pred > 0.80 → surge regime. surge_scalar ∈ (0,1] from distance above threshold.
-  P_t = 15 + surge_scalar × (22 − 15). Hard cap: ₹22/kWh.
-- If U_pred < 0.30 → discount regime. discount_scalar ∈ (0,1] from distance below threshold.
-  P_t = 15 − discount_scalar × (15 − 10). Hard floor: ₹10/kWh.
-- Otherwise → neutral regime. P_t near ₹15 with small linear adjustment.
-- Never return a price outside [10, 22].
+- Baseline tariff: 15.0 Rs/kWh
+- If U_pred > 0.80: surge regime. surge_scalar = (U_pred - 0.80) / (1.0 - 0.80), clipped to [0, 1]. P_t = 15 + surge_scalar * (22 - 15). Hard cap: 22.0 Rs/kWh.
+- If U_pred < 0.30: discount regime. discount_scalar = (0.30 - U_pred) / 0.30, clipped to [0, 1]. P_t = 15 - discount_scalar * (15 - 10). Hard floor: 10.0 Rs/kWh.
+- Otherwise: neutral regime. P_t = 15 + (U_pred - 0.55) * 2.0, clipped to [10, 22].
+- p_new must always be a plain decimal number between 10.0 and 22.0.
 
-Use α to modulate surge intensity and β for discount depth.
-Higher ε means demand is more elastic (price-sensitive).
+CRITICAL RULES for the JSON output:
+- Every value must be a plain number — no expressions, no formulas, no arithmetic operators.
+- surge_scalar and discount_scalar must be pre-computed decimal numbers between 0.0 and 1.0.
+- Do NOT write things like "0.9878 * 3.5239 / (3.5239 + 1)" — compute it first and write the result.
 
-Return ONLY valid JSON matching exactly this schema — no markdown, no extra keys:
+Return ONLY valid JSON with exactly these keys — no markdown, no extra keys, no comments:
 {
-  "p_new": <float, ₹/kWh>,
-  "regime": <"surge"|"discount"|"neutral">,
-  "surge_scalar": <float 0-1>,
-  "discount_scalar": <float 0-1>,
-  "elasticity_used": <float>,
-  "rationale": "<1-2 sentence business justification>"
+  "p_new": <decimal number between 10.0 and 22.0>,
+  "regime": <"surge" or "discount" or "neutral">,
+  "surge_scalar": <decimal number between 0.0 and 1.0>,
+  "discount_scalar": <decimal number between 0.0 and 1.0>,
+  "elasticity_used": <decimal number>,
+  "rationale": "<1-2 sentence justification>"
 }
 """.strip()
 
@@ -287,32 +308,37 @@ You are the MonitoringLearningAgent in an Agentic EV Charging Optimisation Syste
 
 Your role:
 Evaluate the TariffPricingAgent's last decision against realised operational outcomes.
-Propose parameter updates (Δε, Δα, Δβ) to improve future pricing decisions.
+Propose parameter updates (delta_epsilon, delta_alpha, delta_beta) to improve future pricing decisions.
 
-Compute:
-1. demand_shift = −ε × ((p_new − 15) / 15)
-2. revenue_new = p_new × kwh × max(0.05, 1 + demand_shift)
-3. revenue_baseline = 15 × kwh
-4. revenue_gain_pct = (revenue_new − revenue_baseline) / revenue_baseline × 100
-5. charger_utilisation = clip(u_actual + demand_shift × 0.1, 0, 1)
-6. avg_wait_reduction = −demand_shift × q_actual  (positive = improvement)
+Use these formulas to compute the metrics (all values are provided to you):
+1. demand_shift = -epsilon * ((p_new - 15) / 15)
+2. revenue_new = p_new * kwh * max(0.05, 1 + demand_shift)
+3. revenue_baseline = 15 * kwh
+4. revenue_gain_pct = (revenue_new - revenue_baseline) / revenue_baseline * 100
+5. charger_utilisation = clip(u_actual + demand_shift * 0.1, 0, 1)
+6. avg_wait_reduction = -demand_shift * q_actual
 7. pricing_efficiency = revenue_new / kwh
-8. reward = 0.5 × tanh(revenue_gain_pct/20) + 0.3 × charger_utilisation − 0.2 × max(0, −avg_wait_reduction)
+8. reward = 0.5 * tanh(revenue_gain_pct/20) + 0.3 * charger_utilisation - 0.2 * max(0, -avg_wait_reduction)
 
-Parameter update logic:
-- Keep all deltas small: |Δε| ≤ 0.05, |Δα| ≤ 0.10, |Δβ| ≤ 0.10
+Parameter update rules:
+- Keep all deltas small: |delta_epsilon| <= 0.05, |delta_alpha| <= 0.10, |delta_beta| <= 0.10
 
-Return ONLY valid JSON matching exactly this schema — no markdown, no extra keys:
+CRITICAL RULES for the JSON output:
+- Every value must be a plain decimal number — no expressions, no formulas, no arithmetic operators.
+- Compute all values first, then write the results as plain numbers.
+- Do NOT write things like "0.5 * tanh(...)" — compute it and write the result.
+
+Return ONLY valid JSON with exactly these keys — no markdown, no extra keys, no comments:
 {
-  "delta_epsilon": <float>,
-  "delta_alpha": <float>,
-  "delta_beta": <float>,
-  "reward": <float>,
-  "revenue_gain_pct": <float>,
-  "charger_utilisation": <float>,
-  "avg_wait_reduction": <float>,
-  "pricing_efficiency": <float>,
-  "demand_shift": <float>,
+  "delta_epsilon": <decimal number>,
+  "delta_alpha": <decimal number>,
+  "delta_beta": <decimal number>,
+  "reward": <decimal number>,
+  "revenue_gain_pct": <decimal number>,
+  "charger_utilisation": <decimal number between 0 and 1>,
+  "avg_wait_reduction": <decimal number>,
+  "pricing_efficiency": <decimal number>,
+  "demand_shift": <decimal number>,
   "reflection": "<2-3 sentence learning reflection>"
 }
 """.strip()

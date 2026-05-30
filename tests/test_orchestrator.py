@@ -92,7 +92,7 @@ def test_parse_args_defaults():
 
 def test_orchestrator_missing_csv_raises(monkeypatch):
     """AgenticOrchestrator must raise FileNotFoundError when CSV path is missing."""
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key")
     from orchestrator import AgenticOrchestrator
     with pytest.raises(FileNotFoundError, match="not found"):
         AgenticOrchestrator(csv_path="/nonexistent/path/unified.csv")
@@ -104,7 +104,7 @@ def test_orchestrator_missing_csv_raises(monkeypatch):
 
 def test_export_predictions_schema(monkeypatch):
     """export_predictions() must produce CSV with documented column names."""
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key")
     monkeypatch.setattr("src.agents.demand.XGB_PARAMS", {
         "n_estimators": 20, "learning_rate": 0.1, "max_depth": 3,
         "n_jobs": 1, "verbosity": 0, "tree_method": "hist",

@@ -12,8 +12,8 @@ xgboost==3.2.0
 lightgbm==4.6.0
 scikit-learn==1.8.0
 
-# Gemini AI (google-genai replaces deprecated google-generativeai)
-google-genai==2.7.0
+# LLM inference (Groq — free tier, OpenAI-compatible)
+groq>=0.9.0
 
 # Schema validation
 pydantic==2.13.4

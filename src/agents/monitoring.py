@@ -36,10 +36,18 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_retry_delay(exc: Exception, default: float = 5.0) -> float:
-    """Extract retry_delay seconds from a Gemini 429 error, with fallback."""
+    """Extract retry_delay seconds from a Gemini 429 error, with fallback.
+    Handles both new SDK JSON format ('retryDelay': '41s') and old proto format.
+    """
     try:
         import re
-        m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", str(exc))
+        msg = str(exc)
+        # New SDK format: 'retryDelay': '41s'
+        m = re.search(r"['\"]retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)s['\"]", msg)
+        if m:
+            return float(m.group(1)) + 2.0
+        # Old proto format: retry_delay { seconds: 41 }
+        m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", msg)
         if m:
             return float(m.group(1)) + 2.0
     except Exception:
@@ -173,6 +181,9 @@ class MonitoringLearningAgent:
             "avg_wait_reduction": avg_wait_reduction,
             "pricing_efficiency": pricing_efficiency,
             "demand_shift": demand_shift,
+            # Customer Response Rate: % shift in session volume due to tariff change
+            # Positive = demand increased (discount worked), Negative = demand fell (surge effect)
+            "customer_response_rate": demand_shift * 100.0,
             "reward": reward,
             "epsilon_after": self.pricing_agent.epsilon,
             "alpha_after": self.pricing_agent.alpha,
@@ -208,8 +219,9 @@ class MonitoringLearningAgent:
                 "step", "timestamp", "u_pred", "q_pred", "u_actual", "q_actual",
                 "p_new", "regime", "rationale", "revenue_new", "revenue_baseline",
                 "revenue_gain_pct", "charger_utilisation", "avg_wait_reduction",
-                "pricing_efficiency", "demand_shift", "reward", "epsilon_after",
-                "alpha_after", "beta_after", "reflection", "lr_used",
+                "pricing_efficiency", "demand_shift", "customer_response_rate",
+                "reward", "epsilon_after", "alpha_after", "beta_after",
+                "reflection", "lr_used",
             ])
         return pd.DataFrame(self._episode_log)
 
@@ -315,7 +327,10 @@ class MonitoringLearningAgent:
                     exc,
                 )
                 if attempt < self._max_retries - 1:
-                    wait = _parse_retry_delay(exc, default=1.5 * (attempt + 1))
+                    # For 400 errors (bad JSON), retry immediately
+                    # For 429 rate limit errors, honour the retry-after hint
+                    wait = _parse_retry_delay(exc, default=2.0)
+                    logger.info("MonitoringLearningAgent: waiting %.1fs before retry …", wait)
                     time.sleep(wait)
 
         # ── All retries exhausted — use deterministic fallback ────────────────

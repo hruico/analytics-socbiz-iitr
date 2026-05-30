@@ -55,7 +55,7 @@ def _make_unified_csv(path: str, n: int = 300, seed: int = 42) -> None:
 def _make_pricing_agent(monkeypatch=None) -> TariffPricingAgent:
     """Create a TariffPricingAgent with a mocked Gemini model."""
     if monkeypatch:
-        monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-testing")
+        monkeypatch.setenv("GROQ_API_KEY", "fake-key-for-testing")
     with patch("src.agents.pricing.build_gemini_model") as mock_build:
         mock_build.return_value = None
         agent = TariffPricingAgent.__new__(TariffPricingAgent)
@@ -167,8 +167,9 @@ def test_gemini_fallback_returns_valid_decision(monkeypatch):
     When Gemini always raises, compute_tariff() must return a valid PricingDecision
     via the deterministic fallback.
     """
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
-    with patch("src.agents.pricing.build_gemini_model") as mock_build:
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key")
+    with patch("src.agents.pricing.build_gemini_model") as mock_build, \
+         patch("src.agents.pricing.time.sleep"):  # skip retry delays
         mock_model = mock_build.return_value
         mock_model.generate_content.side_effect = Exception("Gemini down")
 
@@ -191,7 +192,7 @@ def test_gemini_fallback_returns_valid_decision(monkeypatch):
 
 def test_demand_agent_evaluation_metrics_shape(monkeypatch):
     """evaluation_metrics() must return dict with both targets and RMSE/MAE/R2 keys."""
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key")
     # Use a lightweight XGBoost config so the test completes quickly
     monkeypatch.setattr("src.agents.demand.XGB_PARAMS", {
         "n_estimators": 20, "learning_rate": 0.1, "max_depth": 3,
@@ -216,7 +217,7 @@ def test_demand_agent_evaluation_metrics_shape(monkeypatch):
 
 def test_demand_agent_compare_backends_shape(monkeypatch):
     """compare_backends() must return DataFrame with expected columns when LightGBM enabled."""
-    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key")
     monkeypatch.setattr("src.agents.demand.XGB_PARAMS", {
         "n_estimators": 20, "learning_rate": 0.1, "max_depth": 3,
         "n_jobs": 1, "verbosity": 0, "tree_method": "hist",

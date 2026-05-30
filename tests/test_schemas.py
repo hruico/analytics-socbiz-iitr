@@ -125,11 +125,11 @@ def test_property15_forecast_state_hour_bounds():
 
 def test_build_gemini_model_no_api_key(monkeypatch):
     """
-    build_gemini_model() must raise EnvironmentError when GEMINI_API_KEY is unset.
+    build_gemini_model() must raise EnvironmentError when GROQ_API_KEY is unset.
     """
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     from src.config import build_gemini_model
-    with pytest.raises(EnvironmentError, match="GEMINI_API_KEY"):
+    with pytest.raises(EnvironmentError, match="GROQ_API_KEY"):
         build_gemini_model("test prompt")
 
 

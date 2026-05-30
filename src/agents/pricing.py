@@ -1,9 +1,9 @@
 # =============================================================================
 # src/agents/pricing.py — TariffPricingAgent
 #
-# Gemini-powered tariff agent that translates demand forecasts into optimal
-# per-kWh tariffs.  Falls back to a deterministic sigmoid-based formula when
-# the Gemini API is unavailable or returns invalid JSON.
+# LLM-powered tariff agent (Groq / llama-3.3-70b) that translates demand
+# forecasts into optimal per-kWh tariffs. Falls back to a deterministic
+# sigmoid-based formula when the API is unavailable or returns invalid JSON.
 #
 # Parameter vector Θ = [ε, α, β]:
 #   ε — price elasticity (demand sensitivity)
@@ -40,14 +40,21 @@ logger = logging.getLogger(__name__)
 def _parse_retry_delay(exc: Exception, default: float = 5.0) -> float:
     """
     Extract the retry_delay seconds from a Gemini 429 ResourceExhausted error.
+    Handles both the new SDK JSON format ('retryDelay': '41s') and the old
+    proto format (retry_delay { seconds: 41 }).
     Falls back to *default* if the hint is not present.
     """
     try:
-        msg = str(exc)
         import re
+        msg = str(exc)
+        # New SDK format: 'retryDelay': '41s'  or  "retryDelay": "41s"
+        m = re.search(r"['\"]retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)s['\"]", msg)
+        if m:
+            return float(m.group(1)) + 2.0
+        # Old proto format: retry_delay { seconds: 41 }
         m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", msg)
         if m:
-            return float(m.group(1)) + 2.0  # add 2s buffer
+            return float(m.group(1)) + 2.0
     except Exception:
         pass
     return default
@@ -55,12 +62,12 @@ def _parse_retry_delay(exc: Exception, default: float = 5.0) -> float:
 
 class TariffPricingAgent:
     """
-    Gemini-powered tariff agent.
+    LLM-powered tariff agent (Groq / llama-3.3-70b).
 
     Translates a ``ForecastState`` (predicted utilisation, queue, kWh, etc.)
     into a ``PricingDecision`` (regime, p_new, scalars, rationale).
 
-    Gemini is called up to ``max_retries`` times with exponential backoff.
+    The LLM is called up to ``max_retries`` times with backoff.
     If all retries are exhausted, a deterministic sigmoid-based fallback is
     used and an ERROR is logged.
 
@@ -77,7 +84,7 @@ class TariffPricingAgent:
     beta_init : float
         Initial discount-sensitivity parameter β.  Default 4.0.
     max_retries : int
-        Maximum number of Gemini API attempts before falling back.  Default 3.
+        Maximum number of Groq API attempts before falling back.  Default 3.
     """
 
     # Bounds for each component of Θ
@@ -100,7 +107,7 @@ class TariffPricingAgent:
         )
         self._max_retries: int = max_retries
 
-        # ── Build Gemini model ────────────────────────────────────────────────
+        # ── Build LLM model (Groq) ────────────────────────────────────────────
         self._model = build_gemini_model(TARIFF_SYSTEM_PROMPT)
         logger.info(
             "TariffPricingAgent initialised: ε=%.3f  α=%.3f  β=%.3f  max_retries=%d",
@@ -133,11 +140,11 @@ class TariffPricingAgent:
         """
         Compute the optimal tariff for the given forecast state.
 
-        Attempts to call Gemini up to ``max_retries`` times with exponential
-        backoff (``1.5 × attempt`` seconds between retries).  If all attempts
-        fail, falls back to the deterministic sigmoid formula and logs ERROR.
+        Attempts to call the LLM (Groq) up to ``max_retries`` times with
+        backoff. If all attempts fail, falls back to the deterministic sigmoid
+        formula and logs ERROR.
 
-        After receiving a Gemini response, regime/price consistency is enforced:
+        After receiving a response, regime/price consistency is enforced:
         - If regime is "surge" but p_new ≤ P_BASE → override with fallback
         - If regime is "discount" but p_new ≥ P_BASE → override with fallback
 
@@ -177,12 +184,14 @@ class TariffPricingAgent:
                 )
                 if attempt < self._max_retries - 1:
                     # Honour retry_delay hint from 429 responses
-                    wait = _parse_retry_delay(exc, default=1.5 * (attempt + 1))
+                    # For 400 errors (bad JSON), retry immediately
+                    wait = _parse_retry_delay(exc, default=2.0)
+                    logger.info("TariffPricingAgent: waiting %.1fs before retry …", wait)
                     time.sleep(wait)
 
         # ── All retries exhausted — use deterministic fallback ────────────────
         logger.error(
-            "TariffPricingAgent: all %d Gemini retries exhausted for state "
+            "TariffPricingAgent: all %d LLM retries exhausted for state "
             "u_pred=%.4f; using deterministic fallback.",
             self._max_retries,
             state.u_pred,
@@ -291,7 +300,7 @@ class TariffPricingAgent:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _build_prompt(self, state: ForecastState) -> str:
-        """Construct the Gemini prompt from the current state and Θ."""
+        """Construct the LLM prompt from the current state and Θ."""
         return (
             f"Forecast state:\n"
             f"  u_pred={state.u_pred:.4f}  q_pred={state.q_pred:.4f}\n"
@@ -328,7 +337,7 @@ class TariffPricingAgent:
         Deterministic sigmoid-based fallback pricing decision.
 
         Computes regime, scalars, and p_new from the current Θ without
-        calling Gemini.  p_new is always clipped to [P_DISCOUNT_FLOOR, P_SURGE_CAP].
+        calling the LLM. p_new is always clipped to [P_DISCOUNT_FLOOR, P_SURGE_CAP].
         """
         u_pred = state.u_pred
 
@@ -375,15 +384,11 @@ class TariffPricingAgent:
         decision: PricingDecision,
     ) -> PricingDecision:
         """
-        Enforce regime/price consistency on a Gemini-returned decision.
+        Enforce regime/price consistency on an LLM-returned decision.
 
         Rules:
         - If regime is "surge" but p_new ≤ P_BASE → override with fallback
         - If regime is "discount" but p_new ≥ P_BASE → override with fallback
-        - p_new is always clipped to [P_DISCOUNT_FLOOR, P_SURGE_CAP] (handled
-          by the PricingDecision Pydantic validator, but we double-check here)
-
-        Returns the (possibly overridden) decision.
         """
         u_pred = state.u_pred
         override = False

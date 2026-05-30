@@ -22,6 +22,7 @@ from src.config import (
     PROCESSED_BASE_PATH,
     OUTPUTS_DIR,
     EDA_OUTPUTS_DIR,
+    EPSILON_INIT,
 )
 from src.agents.demand import DemandPredictionAgent
 from src.agents.pricing import TariffPricingAgent
@@ -54,7 +55,7 @@ class AgenticOrchestrator:
     def __init__(
         self,
         csv_path: str = PROCESSED_BASE_PATH,
-        epsilon_init: float = 1.2,
+        epsilon_init: float = EPSILON_INIT,
         alpha_init: float = 4.0,
         beta_init: float = 4.0,
         lr: float = 0.8,
@@ -70,12 +71,13 @@ class AgenticOrchestrator:
                 "  python -m src.pipeline.preprocess"
             )
 
-        # ── Validate GEMINI_API_KEY ───────────────────────────────────────────
+        # ── Validate GROQ_API_KEY ─────────────────────────────────────────────
         import os
-        if not os.environ.get("GEMINI_API_KEY", ""):
+        if not os.environ.get("GROQ_API_KEY", ""):
             raise EnvironmentError(
-                "GEMINI_API_KEY is not set. Export it before running:\n"
-                "  export GEMINI_API_KEY='your-key-here'"
+                "GROQ_API_KEY is not set. Export it before running:\n"
+                "  export GROQ_API_KEY='your-groq-key-here'\n"
+                "Get a free key at: https://console.groq.com"
             )
 
         self._csv_path = csv_path
@@ -187,7 +189,14 @@ class AgenticOrchestrator:
         # Revenue and pricing metrics
         print("\n── Revenue & Pricing ────────────────────────────────────────")
         print(f"  Revenue Gain %          : {df['revenue_gain_pct'].mean():+.2f}%")
-        print(f"  Pricing Efficiency      : ₹{df['pricing_efficiency'].mean():.2f}/kWh")
+        print(f"  Pricing Efficiency      : Rs{df['pricing_efficiency'].mean():.2f}/kWh")
+
+        # Regime distribution
+        regime_counts = df['regime'].value_counts()
+        total = len(df)
+        print(f"  Surge steps             : {regime_counts.get('surge', 0)} ({regime_counts.get('surge', 0)/total*100:.1f}%)")
+        print(f"  Neutral steps           : {regime_counts.get('neutral', 0)} ({regime_counts.get('neutral', 0)/total*100:.1f}%)")
+        print(f"  Discount steps          : {regime_counts.get('discount', 0)} ({regime_counts.get('discount', 0)/total*100:.1f}%)")
 
         # Charger utilisation
         print("\n── Charger Utilisation ──────────────────────────────────────")
@@ -205,12 +214,19 @@ class AgenticOrchestrator:
         print("\n── Queue & Wait ─────────────────────────────────────────────")
         print(f"  Avg Wait Reduction      : {df['avg_wait_reduction'].mean():.4f}")
 
+        # Customer Response Rate (demand elasticity proxy — required metric)
+        print("\n── Customer Response (Demand Elasticity) ────────────────────")
+        if 'customer_response_rate' in df.columns:
+            crr = df['customer_response_rate'].mean()
+            print(f"  Customer Response Rate  : {crr:+.2f}%")
+            print(f"  (negative = demand fell due to surge pricing)")
+
         # Reward convergence
         print("\n── Learning ─────────────────────────────────────────────────")
         print(f"  Mean Reward             : {df['reward'].mean():+.4f}")
-        print(f"  Final ε                 : {df['epsilon_after'].iloc[-1]:.4f}")
-        print(f"  Final α                 : {df['alpha_after'].iloc[-1]:.4f}")
-        print(f"  Final β                 : {df['beta_after'].iloc[-1]:.4f}")
+        print(f"  Final epsilon           : {df['epsilon_after'].iloc[-1]:.4f}")
+        print(f"  Final alpha             : {df['alpha_after'].iloc[-1]:.4f}")
+        print(f"  Final beta              : {df['beta_after'].iloc[-1]:.4f}")
 
         print("=" * 65 + "\n")
 
@@ -248,8 +264,8 @@ class AgenticOrchestrator:
             "is_weekend": test["is_weekend"].astype(int),
             "actual_urban_mean_utilization": test["urban_mean_utilization"].astype(float),
             "actual_urban_peak_queue": test["urban_peak_queue"].astype(float),
-            "pred_urban_mean_utilization": preds[:, 0].astype(float),
-            "pred_urban_peak_queue": preds[:, 1].astype(float),
+            "pred_urban_mean_utilization": preds[:, 0].clip(0.0, 1.0).astype(float),
+            "pred_urban_peak_queue": preds[:, 1].clip(0.0).astype(float),  # floor negatives
         })
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(path, index=False)
@@ -329,8 +345,8 @@ def parse_args() -> argparse.Namespace:
         help="Seconds between consecutive Gemini API calls",
     )
     parser.add_argument(
-        "--epsilon", type=float, default=1.2,
-        help="Initial price-elasticity parameter ε",
+        "--epsilon", type=float, default=EPSILON_INIT,
+        help="Initial price-elasticity parameter epsilon (default: 0.3 — inelastic EV demand)",
     )
     parser.add_argument(
         "--alpha", type=float, default=4.0,

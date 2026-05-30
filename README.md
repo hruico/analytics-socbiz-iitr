@@ -69,7 +69,7 @@ Parameter vector **Θ = [ε, α, β]** is updated every step:
 ## Prerequisites
 
 - Python 3.11+
-- A [Google Gemini API key](https://aistudio.google.com/app/apikey)
+- A free [Groq API key](https://console.groq.com) (sign up → API Keys → Create)
 - Raw data files in `data/raw/` (see Datasets section below)
 
 ---
@@ -84,8 +84,8 @@ source .venv/bin/activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Export your Gemini API key
-export GEMINI_API_KEY='your-key-here'
+# 3. Export your Groq API key (free at console.groq.com)
+export GROQ_API_KEY='your-groq-key-here'
 ```
 
 ---
@@ -244,12 +244,12 @@ scaling is a heuristic — no ground-truth queue data is available for calibrati
 not an observed causal effect. It approximates how demand responds to price
 changes under the assumed elasticity parameter ε.
 
-**Revenue figures**: Simulated at ₹15/kWh baseline. Actual tariffs and
-currency conversions are not applied. Revenue Gain % is relative to this baseline.
-
 **No causal claims**: All associations between pricing decisions and outcomes
 are model-derived. The system does not claim to establish causal relationships
 between tariff changes and observed demand shifts.
+
+**Revenue figures**: Simulated at ₹15/kWh baseline. Actual tariffs and
+currency conversions are not applied. Revenue Gain % is relative to this baseline.
 
 ---
 
