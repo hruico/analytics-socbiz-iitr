@@ -115,8 +115,8 @@ def test_export_predictions_schema(monkeypatch):
         _make_unified_csv(csv_path, n=300)
         out_path = str(Path(tmpdir) / "predictions.csv")
 
-        with patch("src.agents.pricing.build_gemini_model"), \
-             patch("src.agents.monitoring.build_gemini_model"):
+        with patch("src.agents.pricing.ChatGroq"), \
+             patch("src.agents.monitoring.ChatGroq"):
 
             from orchestrator import AgenticOrchestrator
             orch = AgenticOrchestrator.__new__(AgenticOrchestrator)
@@ -127,14 +127,16 @@ def test_export_predictions_schema(monkeypatch):
             from src.agents.demand import DemandPredictionAgent
             from src.agents.pricing import TariffPricingAgent
             from src.agents.monitoring import MonitoringLearningAgent
+            from unittest.mock import MagicMock
             import numpy as np
 
             orch.demand_agent = DemandPredictionAgent(csv_path=csv_path)
 
             pricing = TariffPricingAgent.__new__(TariffPricingAgent)
-            pricing._theta = np.array([1.2, 4.0, 4.0])
+            pricing._theta = np.array([0.3, 4.0, 4.0])
             pricing._max_retries = 1
-            pricing._model = None
+            pricing._llm = MagicMock()
+            pricing._graph = None
             orch.pricing_agent = pricing
 
             from unittest.mock import MagicMock

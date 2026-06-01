@@ -123,15 +123,18 @@ def test_property15_forecast_state_hour_bounds():
 # Unit test: build_gemini_model() raises EnvironmentError without API key
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_build_gemini_model_no_api_key(monkeypatch):
+# ─────────────────────────────────────────────────────────────────────────────
+# Unit test: GROQ_API_KEY check in agents
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_pricing_agent_no_api_key_raises(monkeypatch):
     """
-    build_gemini_model() must raise EnvironmentError when GROQ_API_KEY is unset.
+    TariffPricingAgent must raise EnvironmentError when GROQ_API_KEY is unset.
     """
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    from src.config import build_gemini_model
+    from src.agents.pricing import TariffPricingAgent
     with pytest.raises(EnvironmentError, match="GROQ_API_KEY"):
-        build_gemini_model("test prompt")
-
+        TariffPricingAgent()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Unit test: LearningUpdate schema

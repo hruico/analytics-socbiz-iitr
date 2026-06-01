@@ -1,14 +1,14 @@
 # =============================================================================
-# src/agents/monitoring.py — MonitoringLearningAgent
+# src/agents/monitoring.py — MonitoringLearningAgent (LangGraph-based)
 #
-# Gemini-powered monitoring and learning agent that evaluates pricing decisions
-# against realised operational outcomes and proposes parameter updates Δθ.
+# A genuine LangGraph agent that evaluates pricing outcomes and proposes
+# parameter updates through contextual reasoning, not formula execution.
 #
-# Computes all OP'26 metrics: demand_shift, revenue_new, revenue_gain_pct,
-# charger_utilisation, avg_wait_reduction, pricing_efficiency, reward.
-#
-# Scales Gemini-proposed Δθ by learning rate η = η₀ / (1 + decay × t) before
-# calling pricing_agent.apply_update().
+# Graph nodes:
+#   compute_metrics  → Python computes all OP'26 metrics deterministically
+#   evaluate_outcome → LLM reflects on what the pricing decision achieved
+#   propose_update   → LLM proposes Δθ with economic reasoning
+#   apply_update     → Python applies and clips the update
 # =============================================================================
 
 from __future__ import annotations
@@ -16,69 +16,112 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
+from langchain_groq import ChatGroq
+from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.graph import StateGraph, END
+
 from src.config import (
-    build_gemini_model,
-    MONITOR_SYSTEM_PROMPT,
     P_BASE,
     ForecastState,
     PricingDecision,
     LearningUpdate,
+    GROQ_MODEL,
 )
 from src.agents.pricing import TariffPricingAgent
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_retry_delay(exc: Exception, default: float = 5.0) -> float:
-    """Extract retry_delay seconds from a Gemini 429 error, with fallback.
-    Handles both new SDK JSON format ('retryDelay': '41s') and old proto format.
-    """
-    try:
-        import re
-        msg = str(exc)
-        # New SDK format: 'retryDelay': '41s'
-        m = re.search(r"['\"]retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)s['\"]", msg)
-        if m:
-            return float(m.group(1)) + 2.0
-        # Old proto format: retry_delay { seconds: 41 }
-        m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", msg)
-        if m:
-            return float(m.group(1)) + 2.0
-    except Exception:
-        pass
-    return default
+# ─────────────────────────────────────────────────────────────────────────────
+# LangGraph state schema
+# ─────────────────────────────────────────────────────────────────────────────
 
+class MonitorState(TypedDict):
+    state: ForecastState
+    decision: PricingDecision
+    epsilon: float
+    alpha: float
+    beta: float
+    step: int
+    # Computed metrics
+    demand_shift: float
+    revenue_new: float
+    revenue_baseline: float
+    revenue_gain_pct: float
+    charger_utilisation: float
+    avg_wait_reduction: float
+    pricing_efficiency: float
+    reward: float
+    # LLM outputs
+    reflection: str
+    update: LearningUpdate | None
+    error: str | None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EVALUATE_SYSTEM = """You are a pricing performance analyst for an EV charging network.
+
+Your job is to evaluate whether the last pricing decision was good or bad,
+and explain WHY in economic terms.
+
+Think about:
+- Did the revenue gain justify the price change?
+- Did the charger utilisation improve or worsen?
+- Was the demand response (customer_response_rate) what we expected given the elasticity?
+- Is the current elasticity parameter (epsilon) calibrated correctly?
+  If demand barely shifted when we surged, epsilon might be too high (demand is more inelastic).
+  If demand collapsed when we surged, epsilon might be too low.
+
+Write 2-3 sentences of honest evaluation. Be specific about the numbers."""
+
+_UPDATE_SYSTEM = """You are a parameter tuning agent for an EV charging pricing system.
+
+Based on the performance evaluation, propose small adjustments to the three parameters:
+- epsilon: price elasticity (how sensitive demand is to price changes)
+- alpha: surge pricing sensitivity (how aggressively we surge)
+- beta: discount pricing sensitivity (how aggressively we discount)
+
+Rules:
+- Keep deltas small: |delta_epsilon| <= 0.05, |delta_alpha| <= 0.10, |delta_beta| <= 0.10
+- If revenue gain was positive and demand held up, epsilon might be slightly too high — decrease it
+- If demand collapsed during surge, epsilon is too low — increase it
+- If we're in surge regime and revenue is good, alpha is working — small positive delta
+- If we're in discount regime and utilisation improved, beta is working — small positive delta
+
+Return ONLY valid JSON with exactly these keys:
+{
+  "delta_epsilon": <number, magnitude <= 0.05>,
+  "delta_alpha": <number, magnitude <= 0.10>,
+  "delta_beta": <number, magnitude <= 0.10>,
+  "reward": <the reward value you were given>,
+  "revenue_gain_pct": <the revenue_gain_pct you were given>,
+  "charger_utilisation": <the charger_utilisation you were given>,
+  "avg_wait_reduction": <the avg_wait_reduction you were given>,
+  "pricing_efficiency": <the pricing_efficiency you were given>,
+  "demand_shift": <the demand_shift you were given>,
+  "reflection": "<your 2-3 sentence evaluation of this step>"
+}"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MonitoringLearningAgent
+# ─────────────────────────────────────────────────────────────────────────────
 
 class MonitoringLearningAgent:
     """
-    Gemini-powered monitoring and learning agent.
+    LangGraph-based monitoring and learning agent.
 
     Evaluates each pricing decision against realised outcomes, computes all
-    OP'26 metrics, and proposes parameter updates Δθ = [Δε, Δα, Δβ].
-
-    Gemini is called up to ``max_retries`` times with exponential backoff.
-    If all retries are exhausted, a deterministic economic fallback is used
-    and an ERROR is logged.
-
-    The proposed Δθ is scaled by the current learning rate
-    η = η₀ / (1 + decay × t) before being applied to the pricing agent.
-
-    Parameters
-    ----------
-    pricing_agent : TariffPricingAgent
-        Reference to the pricing agent whose parameters will be updated.
-    lr : float
-        Initial learning rate η₀.  Default 0.8.
-    lr_decay : float
-        Learning rate decay coefficient.  Default 0.002.
-    max_retries : int
-        Maximum number of Gemini API attempts before falling back.  Default 3.
+    OP'26 metrics deterministically, then uses LLM reasoning to propose Δθ.
     """
 
     def __init__(
@@ -88,74 +131,174 @@ class MonitoringLearningAgent:
         lr_decay: float = 0.002,
         max_retries: int = 3,
     ) -> None:
+        import os
+        api_key = os.environ.get("GROQ_API_KEY", "")
+        if not api_key:
+            raise EnvironmentError("GROQ_API_KEY not set")
+
         self.pricing_agent = pricing_agent
-        self._lr: float = lr
-        self._lr_decay: float = lr_decay
-        self._max_retries: int = max_retries
-        self._step: int = 0
+        self._lr = lr
+        self._lr_decay = lr_decay
+        self._max_retries = max_retries
+        self._step = 0
         self._episode_log: list[dict[str, Any]] = []
 
-        # Build Gemini model
-        self._model = build_gemini_model(MONITOR_SYSTEM_PROMPT)
-        logger.info(
-            "MonitoringLearningAgent initialised: lr=%.3f  decay=%.5f  max_retries=%d",
-            self._lr,
-            self._lr_decay,
-            self._max_retries,
+        self._llm = ChatGroq(
+            model=GROQ_MODEL,
+            api_key=api_key,
+            temperature=0.2,
         )
 
-    def step(
-        self,
-        state: ForecastState,
-        decision: PricingDecision,
-    ) -> LearningUpdate:
-        """
-        Evaluate the pricing decision against realised outcomes and update θ.
+        self._graph = self._build_graph()
 
-        Computes all OP'26 metrics deterministically, then calls Gemini to
-        propose Δθ. Scales Δθ by η = η₀ / (1 + decay × t) before applying.
+        logger.info(
+            "MonitoringLearningAgent (LangGraph) initialised: lr=%.3f decay=%.5f",
+            self._lr, self._lr_decay,
+        )
 
-        Appends all metrics plus θ state and lr_used to the episode log.
+    # ── Graph construction ────────────────────────────────────────────────────
 
-        NOTE — Assumptions & Limitations:
-        • demand_shift is a model-based elasticity proxy
-          (−ε × Δp/p_base), NOT an observed causal effect.
-          It approximates how demand responds to price changes
-          based on the assumed elasticity parameter ε.
-        • charger_utilisation is a post-pricing estimate derived
-          from u_actual and demand_shift, not a direct measurement.
-        • avg_wait_reduction is inferred from demand_shift × q_actual;
-          no ground-truth wait-time data is available.
-        • All revenue figures assume the demand model is correct;
-          actual revenue depends on real user behaviour.
+    def _build_graph(self) -> Any:
+        graph = StateGraph(MonitorState)
+        graph.add_node("compute_metrics", self._node_compute_metrics)
+        graph.add_node("evaluate_outcome", self._node_evaluate_outcome)
+        graph.add_node("propose_update", self._node_propose_update)
+        graph.add_node("apply_update", self._node_apply_update)
+        graph.set_entry_point("compute_metrics")
+        graph.add_edge("compute_metrics", "evaluate_outcome")
+        graph.add_edge("evaluate_outcome", "propose_update")
+        graph.add_edge("propose_update", "apply_update")
+        graph.add_edge("apply_update", END)
+        return graph.compile()
 
-        Requirements: 6.1, 6.2, 6.3
-        """
-        # ── 1. Compute metrics deterministically ─────────────────────────────
-        epsilon = self.pricing_agent.epsilon
-        demand_shift = -epsilon * ((decision.p_new - P_BASE) / P_BASE)
-        revenue_new = decision.p_new * state.kwh_delivered * max(0.05, 1.0 + demand_shift)
-        revenue_baseline = P_BASE * state.kwh_delivered
+    # ── Graph nodes ───────────────────────────────────────────────────────────
+
+    def _node_compute_metrics(self, state: MonitorState) -> MonitorState:
+        """Deterministically compute all OP'26 metrics."""
+        s = state["state"]
+        d = state["decision"]
+        epsilon = state["epsilon"]
+
+        demand_shift = -epsilon * ((d.p_new - P_BASE) / P_BASE)
+        revenue_new = d.p_new * s.kwh_delivered * max(0.05, 1.0 + demand_shift)
+        revenue_baseline = P_BASE * s.kwh_delivered
         revenue_gain_pct = (revenue_new - revenue_baseline) / revenue_baseline * 100.0
-        charger_utilisation = float(np.clip(state.u_actual + demand_shift * 0.1, 0.0, 1.0))
-        avg_wait_reduction = -demand_shift * state.q_actual
-        pricing_efficiency = revenue_new / state.kwh_delivered
+        charger_utilisation = float(np.clip(s.u_actual + demand_shift * 0.1, 0.0, 1.0))
+        avg_wait_reduction = -demand_shift * s.q_actual
+        pricing_efficiency = revenue_new / s.kwh_delivered
         reward = (
             0.5 * float(np.tanh(revenue_gain_pct / 20.0))
             + 0.3 * charger_utilisation
             - 0.2 * max(0.0, -avg_wait_reduction)
         )
 
-        # ── 2. Try Gemini for LearningUpdate ──────────────────────────────────
-        update = self._get_learning_update(
-            state, decision, demand_shift, revenue_gain_pct,
-            charger_utilisation, avg_wait_reduction, pricing_efficiency, reward
+        return {
+            **state,
+            "demand_shift": demand_shift,
+            "revenue_new": revenue_new,
+            "revenue_baseline": revenue_baseline,
+            "revenue_gain_pct": revenue_gain_pct,
+            "charger_utilisation": charger_utilisation,
+            "avg_wait_reduction": avg_wait_reduction,
+            "pricing_efficiency": pricing_efficiency,
+            "reward": reward,
+        }
+
+    def _node_evaluate_outcome(self, state: MonitorState) -> MonitorState:
+        """LLM reflects on what the pricing decision achieved."""
+        s = state["state"]
+        d = state["decision"]
+        prompt = (
+            f"Pricing decision just made:\n"
+            f"  Regime: {d.regime}, Price: Rs{d.p_new:.2f}/kWh (baseline: Rs{P_BASE}/kWh)\n"
+            f"  Rationale given: {d.rationale}\n\n"
+            f"Outcomes:\n"
+            f"  Revenue gain: {state['revenue_gain_pct']:+.2f}%\n"
+            f"  Demand shift (customer response): {state['demand_shift']:+.4f} "
+            f"({state['demand_shift']*100:+.1f}% change in demand)\n"
+            f"  Charger utilisation after: {state['charger_utilisation']:.4f} "
+            f"(actual before pricing: {s.u_actual:.4f})\n"
+            f"  Avg wait reduction: {state['avg_wait_reduction']:+.4f}\n"
+            f"  Pricing efficiency: Rs{state['pricing_efficiency']:.2f}/kWh\n"
+            f"  Reward: {state['reward']:+.4f}\n\n"
+            f"Current parameters: epsilon={state['epsilon']:.4f}, "
+            f"alpha={state['alpha']:.4f}, beta={state['beta']:.4f}\n\n"
+            f"Evaluate this pricing decision. Was it good? What should change?"
         )
+        try:
+            response = self._llm.invoke([
+                SystemMessage(content=_EVALUATE_SYSTEM),
+                HumanMessage(content=prompt),
+            ])
+            reflection = response.content.strip()
+            logger.debug("MonitoringAgent reflection: %s", reflection[:120])
+        except Exception as exc:
+            logger.warning("MonitoringAgent: evaluate_outcome failed — %s", exc)
+            reflection = f"Fallback evaluation: reward={state['reward']:.4f}"
 
-        # ── 3. Compute learning rate ──────────────────────────────────────────
-        eta = self._lr / (1.0 + self._lr_decay * self._step)
+        return {**state, "reflection": reflection}
 
-        # ── 4. Scale deltas and apply update ──────────────────────────────────
+    def _node_propose_update(self, state: MonitorState) -> MonitorState:
+        """LLM proposes Δθ based on the evaluation."""
+        prompt = (
+            f"Performance evaluation:\n{state['reflection']}\n\n"
+            f"Metrics to echo back exactly:\n"
+            f"  reward={state['reward']:.6f}\n"
+            f"  revenue_gain_pct={state['revenue_gain_pct']:.6f}\n"
+            f"  charger_utilisation={state['charger_utilisation']:.6f}\n"
+            f"  avg_wait_reduction={state['avg_wait_reduction']:.6f}\n"
+            f"  pricing_efficiency={state['pricing_efficiency']:.6f}\n"
+            f"  demand_shift={state['demand_shift']:.6f}\n\n"
+            f"Current parameters: epsilon={state['epsilon']:.4f}, "
+            f"alpha={state['alpha']:.4f}, beta={state['beta']:.4f}\n\n"
+            f"Propose parameter updates and return JSON."
+        )
+        for attempt in range(self._max_retries):
+            try:
+                response = self._llm.invoke([
+                    SystemMessage(content=_UPDATE_SYSTEM),
+                    HumanMessage(content=prompt),
+                ])
+                raw = response.content.strip()
+                if raw.startswith("```"):
+                    raw = "\n".join(
+                        l for l in raw.splitlines() if not l.startswith("```")
+                    ).strip()
+                data = json.loads(raw)
+                # Always use our computed metrics, not LLM's echoed values
+                data["reward"] = state["reward"]
+                data["revenue_gain_pct"] = state["revenue_gain_pct"]
+                data["charger_utilisation"] = state["charger_utilisation"]
+                data["avg_wait_reduction"] = state["avg_wait_reduction"]
+                data["pricing_efficiency"] = state["pricing_efficiency"]
+                data["demand_shift"] = state["demand_shift"]
+                data["reflection"] = state["reflection"]
+                update = LearningUpdate(**data)
+                return {**state, "update": update, "error": None}
+            except Exception as exc:
+                logger.warning(
+                    "MonitoringAgent: propose_update attempt %d/%d failed — %s",
+                    attempt + 1, self._max_retries, exc,
+                )
+                if attempt < self._max_retries - 1:
+                    time.sleep(2.0)
+
+        logger.error("MonitoringAgent: LLM failed, using deterministic fallback")
+        return {**state, "update": None, "error": "llm_failed"}
+
+    def _node_apply_update(self, state: MonitorState) -> MonitorState:
+        """Apply the proposed update (or deterministic fallback) to θ."""
+        if state["update"] is None:
+            update = self._deterministic_fallback(
+                state["demand_shift"], state["revenue_gain_pct"],
+                state["charger_utilisation"], state["avg_wait_reduction"],
+                state["pricing_efficiency"], state["reward"],
+                state["reflection"],
+            )
+        else:
+            update = state["update"]
+
+        eta = self._lr / (1.0 + self._lr_decay * state["step"])
         delta = np.array([
             update.delta_epsilon,
             update.delta_alpha,
@@ -163,7 +306,35 @@ class MonitoringLearningAgent:
         ]) * eta
         self.pricing_agent.apply_update(delta)
 
-        # ── 5. Append to episode log ──────────────────────────────────────────
+        return {**state, "update": update}
+
+    # ── Public interface ──────────────────────────────────────────────────────
+
+    def step(self, state: ForecastState, decision: PricingDecision) -> LearningUpdate:
+        """Run the LangGraph monitoring pipeline for one step."""
+        initial: MonitorState = {
+            "state": state,
+            "decision": decision,
+            "epsilon": self.pricing_agent.epsilon,
+            "alpha": self.pricing_agent.alpha,
+            "beta": self.pricing_agent.beta,
+            "step": self._step,
+            "demand_shift": 0.0,
+            "revenue_new": 0.0,
+            "revenue_baseline": 0.0,
+            "revenue_gain_pct": 0.0,
+            "charger_utilisation": 0.0,
+            "avg_wait_reduction": 0.0,
+            "pricing_efficiency": 0.0,
+            "reward": 0.0,
+            "reflection": "",
+            "update": None,
+            "error": None,
+        }
+        result = self._graph.invoke(initial)
+        update = result["update"]
+
+        eta = self._lr / (1.0 + self._lr_decay * self._step)
         self._episode_log.append({
             "step": self._step,
             "timestamp": state.timestamp,
@@ -174,17 +345,15 @@ class MonitoringLearningAgent:
             "p_new": decision.p_new,
             "regime": decision.regime,
             "rationale": decision.rationale,
-            "revenue_new": revenue_new,
-            "revenue_baseline": revenue_baseline,
-            "revenue_gain_pct": revenue_gain_pct,
-            "charger_utilisation": charger_utilisation,
-            "avg_wait_reduction": avg_wait_reduction,
-            "pricing_efficiency": pricing_efficiency,
-            "demand_shift": demand_shift,
-            # Customer Response Rate: % shift in session volume due to tariff change
-            # Positive = demand increased (discount worked), Negative = demand fell (surge effect)
-            "customer_response_rate": demand_shift * 100.0,
-            "reward": reward,
+            "revenue_new": result["revenue_new"],
+            "revenue_baseline": result["revenue_baseline"],
+            "revenue_gain_pct": result["revenue_gain_pct"],
+            "charger_utilisation": result["charger_utilisation"],
+            "avg_wait_reduction": result["avg_wait_reduction"],
+            "pricing_efficiency": result["pricing_efficiency"],
+            "demand_shift": result["demand_shift"],
+            "customer_response_rate": result["demand_shift"] * 100.0,
+            "reward": result["reward"],
             "epsilon_after": self.pricing_agent.epsilon,
             "alpha_after": self.pricing_agent.alpha,
             "beta_after": self.pricing_agent.beta,
@@ -192,29 +361,11 @@ class MonitoringLearningAgent:
             "lr_used": eta,
         })
 
-        # ── 6. Increment step counter ─────────────────────────────────────────
         self._step += 1
-
         return update
 
     def summary(self) -> pd.DataFrame:
-        """
-        Return a DataFrame with one row per episode step containing all logged
-        metrics.
-
-        Returns
-        -------
-        pd.DataFrame
-            Columns: step, timestamp, u_pred, q_pred, u_actual, q_actual,
-            p_new, regime, rationale, revenue_new, revenue_baseline,
-            revenue_gain_pct, charger_utilisation, avg_wait_reduction,
-            pricing_efficiency, demand_shift, reward, epsilon_after,
-            alpha_after, beta_after, reflection, lr_used.
-
-        Requirements: 6.5
-        """
         if not self._episode_log:
-            # Return empty DataFrame with expected columns
             return pd.DataFrame(columns=[
                 "step", "timestamp", "u_pred", "q_pred", "u_actual", "q_actual",
                 "p_new", "regime", "rationale", "revenue_new", "revenue_baseline",
@@ -227,156 +378,30 @@ class MonitoringLearningAgent:
 
     def off_peak_uplift(self, baseline_df: pd.DataFrame) -> float:
         """
-        Compute Off_Peak_Uplift: percentage change in mean session count during
-        discount-regime hours compared to pre-optimisation baseline.
+        Compute Off_Peak_Uplift: percentage change in mean charger utilisation
+        during discount-regime hours compared to pre-optimisation baseline.
 
-        Formula: (mean_post − mean_baseline) / mean_baseline × 100
+        Per PS: increase in sessions during low-demand periods (utilisation < 30%)
+        after discount pricing. We use u_actual as the utilisation proxy since
+        session-level counts are not available in the episode log.
 
-        Parameters
-        ----------
-        baseline_df : pd.DataFrame
-            Baseline data with ``urban_mean_utilization`` column.
-
-        Returns
-        -------
-        float
-            Off_Peak_Uplift percentage. Returns 0.0 if no discount-regime hours
-            are present in the episode log.
-
-        Requirements: 6.6, 8.4
+        Formula: (mean_post - mean_baseline) / mean_baseline * 100
         """
         if not self._episode_log:
             return 0.0
-
-        # Filter episode log to discount-regime hours
-        discount_rows = [
-            row for row in self._episode_log if row["regime"] == "discount"
-        ]
+        discount_rows = [r for r in self._episode_log if r["regime"] == "discount"]
         if not discount_rows:
             return 0.0
-
-        # Mean utilisation in post-optimisation discount hours
-        mean_post = float(np.mean([row["u_actual"] for row in discount_rows]))
-
-        # Mean utilisation in baseline (use same number of rows from start)
-        n_discount = len(discount_rows)
-        if len(baseline_df) < n_discount:
-            logger.warning(
-                "off_peak_uplift: baseline_df has fewer rows (%d) than discount "
-                "hours (%d) — using all available baseline rows.",
-                len(baseline_df),
-                n_discount,
-            )
-            n_discount = len(baseline_df)
-
-        mean_baseline = float(baseline_df["urban_mean_utilization"].iloc[:n_discount].mean())
-
+        mean_post = float(np.mean([r["u_actual"] for r in discount_rows]))
+        n = min(len(discount_rows), len(baseline_df))
+        # Use urban_mean_utilization as the baseline utilisation proxy
+        util_col = "urban_mean_utilization" if "urban_mean_utilization" in baseline_df.columns else baseline_df.columns[0]
+        mean_baseline = float(baseline_df[util_col].iloc[:n].mean())
         if mean_baseline == 0.0:
-            logger.warning("off_peak_uplift: mean_baseline is zero — returning 0.0")
             return 0.0
-
-        uplift = (mean_post - mean_baseline) / mean_baseline * 100.0
-        return float(uplift)
+        return float((mean_post - mean_baseline) / mean_baseline * 100.0)
 
     # ── Private helpers ───────────────────────────────────────────────────────
-
-    def _get_learning_update(
-        self,
-        state: ForecastState,
-        decision: PricingDecision,
-        demand_shift: float,
-        revenue_gain_pct: float,
-        charger_utilisation: float,
-        avg_wait_reduction: float,
-        pricing_efficiency: float,
-        reward: float,
-    ) -> LearningUpdate:
-        """
-        Try Gemini up to max_retries times to get a LearningUpdate.
-        Falls back to deterministic economic logic if all retries fail.
-
-        Requirements: 6.4
-        """
-        prompt = self._build_prompt(
-            state, decision, demand_shift, revenue_gain_pct,
-            charger_utilisation, avg_wait_reduction, pricing_efficiency, reward
-        )
-
-        for attempt in range(self._max_retries):
-            try:
-                response = self._model.generate_content(prompt)
-                raw_text = response.text.strip()
-
-                # Strip markdown code fences if present
-                if raw_text.startswith("```"):
-                    lines = raw_text.splitlines()
-                    raw_text = "\n".join(
-                        line for line in lines if not line.startswith("```")
-                    ).strip()
-
-                data: dict[str, Any] = json.loads(raw_text)
-                update = LearningUpdate(**data)
-                return update
-
-            except (json.JSONDecodeError, ValidationError, Exception) as exc:
-                logger.warning(
-                    "MonitoringLearningAgent: Gemini attempt %d/%d failed — %s: %s",
-                    attempt + 1,
-                    self._max_retries,
-                    type(exc).__name__,
-                    exc,
-                )
-                if attempt < self._max_retries - 1:
-                    # For 400 errors (bad JSON), retry immediately
-                    # For 429 rate limit errors, honour the retry-after hint
-                    wait = _parse_retry_delay(exc, default=2.0)
-                    logger.info("MonitoringLearningAgent: waiting %.1fs before retry …", wait)
-                    time.sleep(wait)
-
-        # ── All retries exhausted — use deterministic fallback ────────────────
-        logger.error(
-            "MonitoringLearningAgent: all %d Gemini retries exhausted; "
-            "using deterministic fallback.",
-            self._max_retries,
-        )
-        return self._deterministic_fallback(
-            demand_shift, revenue_gain_pct, charger_utilisation,
-            avg_wait_reduction, pricing_efficiency, reward
-        )
-
-    def _build_prompt(
-        self,
-        state: ForecastState,
-        decision: PricingDecision,
-        demand_shift: float,
-        revenue_gain_pct: float,
-        charger_utilisation: float,
-        avg_wait_reduction: float,
-        pricing_efficiency: float,
-        reward: float,
-    ) -> str:
-        """Construct the Gemini prompt from state, decision, and metrics."""
-        return (
-            f"Forecast state:\n"
-            f"  u_pred={state.u_pred:.4f}  q_pred={state.q_pred:.4f}\n"
-            f"  u_actual={state.u_actual:.4f}  q_actual={state.q_actual:.4f}\n"
-            f"  kwh_delivered={state.kwh_delivered:.4f}\n"
-            f"\nPricing decision:\n"
-            f"  p_new=₹{decision.p_new:.2f}/kWh  regime={decision.regime}\n"
-            f"  rationale: {decision.rationale}\n"
-            f"\nComputed metrics:\n"
-            f"  demand_shift={demand_shift:.4f}\n"
-            f"  revenue_gain_pct={revenue_gain_pct:.2f}%\n"
-            f"  charger_utilisation={charger_utilisation:.4f}\n"
-            f"  avg_wait_reduction={avg_wait_reduction:.4f}\n"
-            f"  pricing_efficiency=₹{pricing_efficiency:.2f}/kWh\n"
-            f"  reward={reward:.4f}\n"
-            f"\nCurrent parameters:\n"
-            f"  epsilon={self.pricing_agent.epsilon:.4f}\n"
-            f"  alpha={self.pricing_agent.alpha:.4f}\n"
-            f"  beta={self.pricing_agent.beta:.4f}\n"
-            f"\nPropose parameter updates (Δε, Δα, Δβ) and return JSON."
-        )
 
     def _deterministic_fallback(
         self,
@@ -386,21 +411,11 @@ class MonitoringLearningAgent:
         avg_wait_reduction: float,
         pricing_efficiency: float,
         reward: float,
+        reflection: str = "",
     ) -> LearningUpdate:
-        """
-        Deterministic economic fallback for LearningUpdate when Gemini fails.
-
-        Simple heuristic:
-        - Increase ε if revenue gain is positive, else decrease
-        - Increase α if utilisation is high (> 0.7), else decrease
-        - Increase β if utilisation is low (< 0.3), else decrease
-
-        Requirements: 6.4
-        """
         delta_epsilon = 0.01 if revenue_gain_pct > 0.0 else -0.01
         delta_alpha = 0.02 if charger_utilisation > 0.7 else -0.02
         delta_beta = 0.02 if charger_utilisation < 0.3 else -0.02
-
         return LearningUpdate(
             delta_epsilon=delta_epsilon,
             delta_alpha=delta_alpha,
@@ -411,5 +426,5 @@ class MonitoringLearningAgent:
             avg_wait_reduction=avg_wait_reduction,
             pricing_efficiency=pricing_efficiency,
             demand_shift=demand_shift,
-            reflection="Deterministic fallback: Gemini unavailable.",
+            reflection=reflection or "Deterministic fallback: LLM unavailable.",
         )

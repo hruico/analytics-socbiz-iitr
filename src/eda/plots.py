@@ -550,7 +550,7 @@ def plot_feature_importance(df: pd.DataFrame, output_dir: str) -> None:
         params = {k: v for k, v in XGB_PARAMS.items()}
         params["n_estimators"] = 200  # lighter for EDA
         base = XGBRegressor(**params, random_state=RANDOM_STATE)
-        model = MultiOutputRegressor(base, n_jobs=-1)
+        model = MultiOutputRegressor(base, n_jobs=1)  # n_jobs=1 avoids deadlock
         model.fit(X_tr, y_tr)
 
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
@@ -683,6 +683,8 @@ def run_eda(
     base_path: str = PROCESSED_BASE_PATH,
     acn_path: str = RAW_ACN_PATH,
     output_dir: str = EDA_OUTPUTS_DIR,
+    outcomes_path: str | None = None,
+    predictions_path: str | None = None,
 ) -> None:
     """
     Entry point: loads data, calls all plot functions, saves to output_dir.
@@ -731,12 +733,12 @@ def run_eda(
     plot_feature_importance(df, output_dir)
 
     # ── Post-run plots (require orchestrator outputs) ─────────────────────────
-    predictions_path = str(Path(OUTPUTS_DIR) / "predictions.csv")
-    outcomes_path = str(Path(OUTPUTS_DIR) / "agentic_outcomes.csv")
+    _predictions_path = predictions_path or str(Path(OUTPUTS_DIR) / "predictions.csv")
+    _outcomes_path = outcomes_path or str(Path(OUTPUTS_DIR) / "agentic_outcomes.csv")
 
-    plot_predicted_vs_actual(predictions_path, output_dir)
-    plot_reward_convergence(outcomes_path, output_dir)
-    plot_theta_evolution(outcomes_path, output_dir)
+    plot_predicted_vs_actual(_predictions_path, output_dir)
+    plot_reward_convergence(_outcomes_path, output_dir)
+    plot_theta_evolution(_outcomes_path, output_dir)
 
     logger.info("EDA complete — outputs saved to %s", output_dir)
 
@@ -749,23 +751,26 @@ if __name__ == "__main__":
     import argparse
     from src.utils.logging_utils import configure_logging
 
-    configure_logging("INFO")
-
     parser = argparse.ArgumentParser(description="OP'26 EDA Visualisation Module")
-    parser.add_argument(
-        "--base",
-        default=PROCESSED_BASE_PATH,
-        help="Path to unified_analytical_base.csv",
-    )
-    parser.add_argument(
-        "--acn",
-        default=RAW_ACN_PATH,
-        help="Path to acndata_sessions.json.xlsx",
-    )
-    parser.add_argument(
-        "--out",
-        default=EDA_OUTPUTS_DIR,
-        help="Output directory for EDA plots",
-    )
+    parser.add_argument("--base", default=PROCESSED_BASE_PATH,
+                        help="Path to unified_analytical_base.csv")
+    parser.add_argument("--acn", default=RAW_ACN_PATH,
+                        help="Path to acndata_sessions.json.xlsx")
+    parser.add_argument("--out", default=EDA_OUTPUTS_DIR,
+                        help="Output directory for EDA plots")
+    parser.add_argument("--outcomes", default=None,
+                        help="Path to agentic_outcomes.csv (overrides default)")
+    parser.add_argument("--predictions", default=None,
+                        help="Path to predictions.csv (overrides default)")
+    parser.add_argument("--log-level", default="INFO",
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
-    run_eda(base_path=args.base, acn_path=args.acn, output_dir=args.out)
+
+    configure_logging(args.log_level)
+    run_eda(
+        base_path=args.base,
+        acn_path=args.acn,
+        output_dir=args.out,
+        outcomes_path=args.outcomes,
+        predictions_path=args.predictions,
+    )

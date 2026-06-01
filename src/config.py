@@ -81,82 +81,40 @@ EDA_OUTPUTS_DIR: str = "outputs/eda"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM — Groq (free tier, OpenAI-compatible, ~14 400 RPD on llama-3.3-70b)
+# Agents use langchain-groq ChatGroq directly. GROQ_MODEL is the shared
+# model name constant used by both agents.
 # ─────────────────────────────────────────────────────────────────────────────
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
 
-class _GroqWrapper:
+def _load_api_keys() -> list[str]:
+    """Load all available Groq API keys from environment variables."""
+    keys: list[str] = []
+    primary = os.environ.get("GROQ_API_KEY", "").strip()
+    if primary:
+        keys.append(primary)
+    for i in range(2, 11):
+        k = os.environ.get(f"GROQ_API_KEY_{i}", "").strip()
+        if k and k not in keys:
+            keys.append(k)
+    return keys
+
+
+def build_gemini_model(system_instruction: str, **kwargs):  # type: ignore[return]
     """
-    Thin wrapper around the Groq client that exposes a generate_content(prompt)
-    method compatible with the existing agent code.
-
-    Returns an object with a .text attribute containing the raw JSON string,
-    matching the interface previously provided by the Gemini wrapper.
+    Kept for backward compatibility with any legacy references.
+    Raises EnvironmentError if GROQ_API_KEY is not set.
+    Agents should use ChatGroq directly.
     """
-
-    def __init__(
-        self,
-        client,  # groq.Groq
-        model: str,
-        system_instruction: str,
-        temperature: float,
-    ) -> None:
-        self._client = client
-        self._model = model
-        self._system_instruction = system_instruction
-        self._temperature = temperature
-
-    def generate_content(self, prompt: str):
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_instruction},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=self._temperature,
-            response_format={"type": "json_object"},
-        )
-
-        class _Result:
-            def __init__(self, text: str) -> None:
-                self.text = text
-
-        return _Result(response.choices[0].message.content or "")
-
-
-def build_gemini_model(
-    system_instruction: str,
-    temperature: float = 0.2,
-    response_mime: str = "application/json",
-) -> _GroqWrapper:
-    """
-    Build and return a Groq LLM wrapper.
-    Reads GROQ_API_KEY from the environment.
-    Raises EnvironmentError with the exact export command if the key is missing.
-
-    The function name is kept as build_gemini_model so no agent code needs
-    to change — it's just a drop-in replacement.
-    """
-    api_key = os.environ.get("GROQ_API_KEY", "")
-    if not api_key:
+    keys = _load_api_keys()
+    if not keys:
         raise EnvironmentError(
             "GROQ_API_KEY is not set. Export it before running:\n"
             "  export GROQ_API_KEY='your-groq-key-here'\n"
             "Get a free key at: https://console.groq.com"
         )
-    try:
-        from groq import Groq
-    except ImportError:
-        raise ImportError(
-            "groq package not installed. Run:\n"
-            "  pip install groq"
-        )
-    client = Groq(api_key=api_key)
-    return _GroqWrapper(
-        client=client,
-        model=GROQ_MODEL,
-        system_instruction=system_instruction,
-        temperature=temperature,
+    raise NotImplementedError(
+        "build_gemini_model is deprecated. Agents now use langchain-groq ChatGroq directly."
     )
 
 

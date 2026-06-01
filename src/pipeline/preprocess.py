@@ -7,9 +7,10 @@
 # Assumptions (documented inline):
 #   • Zero/null kWh sessions are excluded — they represent incomplete charges
 #     and would corrupt hourly revenue aggregates.
-#   • Charger utilisation = occupancy_density × 1.2, clipped to [0,1].
-#     The 1.2 scaling factor accounts for brief over-capacity events in the
-#     UrbanEV dataset where occupancy can slightly exceed the nominal maximum.
+#   • Charger Utilisation Rate = avg_duration / 60, clipped to [0,1].
+#     avg_duration is in minutes; each time slot represents 60 minutes of
+#     available time. This matches the PS definition: Charging Time / Total
+#     Available Time.
 #   • Queue length proxy = floor(volume × (1 − utilisation) × 0.4).
 #     This approximates vehicles waiting when chargers are near capacity.
 #   • ACN and UrbanEV are aligned by positional index (not by wall-clock time)
@@ -151,9 +152,13 @@ def _load_urban(urban_dir: str) -> pd.DataFrame:
             f"Unexpected nulls after UrbanEV merge: {null_counts[null_counts > 0].to_dict()}"
         )
 
-    # Assumption: charger_utilization = occupancy_density × 1.2, clipped to [0,1]
-    df["charger_utilization"] = (df["occupancy_density"] * 1.2).clip(0.0, 1.0)
-    # Assumption: queue_length_proxy approximates waiting vehicles near capacity
+    # Charger Utilization Rate = Charging Time / Total Available Time
+    # avg_duration is in minutes; we assume each time_step represents 60 minutes
+    # of available time per station. Clipped to [0, 1].
+    # Assumption: avg_duration is in minutes; 60 min = 1 hour per time slot.
+    df["charger_utilization"] = (df["avg_duration"] / 60.0).clip(0.0, 1.0)
+    # Queue Length Proxy: vehicles waiting when chargers are near capacity
+    # Formula: floor(volume × (1 − utilisation) × 0.4)
     df["queue_length_proxy"] = (
         df["traffic_volume"] * (1.0 - df["charger_utilization"]) * 0.4
     ).apply(np.floor)
@@ -168,7 +173,15 @@ def _aggregate_acn_hourly(df: pd.DataFrame) -> pd.DataFrame:
         acn_sessions_count=("stationID", "count"),
         acn_total_kwh=("kWhDelivered", "sum"),
         acn_base_revenue=("baseline_revenue", "sum"),
+        acn_avg_kwh_per_session=("kWhDelivered", "mean"),
     ).reset_index()
+
+    # Revenue per Session = total revenue / session count
+    agg["acn_revenue_per_session"] = (
+        agg["acn_base_revenue"] / agg["acn_sessions_count"].clip(lower=1)
+    )
+    # Energy Cost per kWh = baseline (₹15/kWh fixed)
+    agg["acn_energy_cost_per_kwh"] = P_BASE
 
     if len(agg) == 0:
         raise ValueError("ACN hourly aggregation produced zero rows. Check input data.")

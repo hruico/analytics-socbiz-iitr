@@ -163,3 +163,68 @@ Fix: Added regime distribution (surge/neutral/discount step counts and %) to
 With `ε = 0.3`, Revenue Gain % should be positive in surge regime since
 `demand_shift = -0.3 × (22-15)/15 = -0.14` (only 14% demand reduction assumed,
 not 56%). Pricing Efficiency Score should improve accordingly.
+
+---
+
+## v1.5.0 — Identified: LLM Agents Not Functioning (Always Falling Back)
+
+### Problem diagnosed
+After running the full orchestrator loop, both LLM agents were consistently
+falling back to deterministic logic on every single step. Two root causes:
+
+**Root cause 1: `elasticity_used=0.0` in TariffPricingAgent**
+The `TARIFF_SYSTEM_PROMPT` described `elasticity_used` only as `<decimal number>`
+with no instruction to use the current `epsilon` parameter. Groq returned `0.0`,
+which failed the Pydantic `gt=0.0` constraint, triggering a `ValidationError`
+on every attempt. After 3 retries, the deterministic fallback ran every step.
+
+**Root cause 2: Prompts structured as formula executors, not reasoning agents**
+Both system prompts gave the LLM exact formulas to execute and told it to
+"compute and return JSON." This made the LLM equivalent to a worse Python
+calculator — the fallback did the same math correctly. The LLM added no value
+because it was never asked to reason contextually about the state.
+
+**Root cause 3: No LangGraph / agentic framework**
+The agents were plain Python classes calling an LLM once per step with no
+state graph, no tool use, no structured reasoning loop. The "agentic" label
+was architectural only — there was no actual agent reasoning happening.
+
+### What will change in v2.0.0
+- Migrate both pricing and monitoring agents to LangGraph state graphs
+- Rewrite prompts to ask for contextual reasoning, not formula execution
+- Fix `elasticity_used` to always be explicitly set to current epsilon
+- Add langchain-core, langchain-groq, langgraph to requirements.txt
+
+---
+
+## v2.0.0 — LangGraph Agentic Rewrite
+
+### What changed
+
+**Architecture**
+- `TariffPricingAgent` rebuilt as a LangGraph `StateGraph` with nodes:
+  - `analyse_state` — LLM reasons about demand context (hour, weekend, queue, trend)
+  - `compute_price` — LLM proposes price with justification, constrained by rules
+  - `validate_decision` — Python enforces hard constraints (price bounds, regime consistency)
+  - Falls back to deterministic formula only if all LLM attempts fail
+- `MonitoringLearningAgent` rebuilt as a LangGraph `StateGraph` with nodes:
+  - `evaluate_outcome` — LLM reflects on what the pricing decision achieved
+  - `propose_update` — LLM proposes Δθ with economic reasoning
+  - `apply_update` — Python applies and clips the update
+
+**Prompt redesign**
+- Prompts now ask for contextual reasoning: "Should we surge given it's 11pm on a weekend?"
+- `elasticity_used` explicitly instructed: "Set elasticity_used to the current epsilon value"
+- Removed formula-execution instructions — LLM reasons, Python enforces math
+- Added few-shot examples of good reasoning in prompts
+
+**Dependencies added**
+- `langchain-core>=0.3.0`
+- `langchain-groq>=0.2.0`
+- `langgraph>=0.2.0`
+
+### Files changed
+- `src/agents/pricing.py` — full LangGraph rewrite
+- `src/agents/monitoring.py` — full LangGraph rewrite
+- `src/config.py` — updated system prompts, added LangGraph imports
+- `requirements.txt` — added langchain-core, langchain-groq, langgraph
