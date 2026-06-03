@@ -26,10 +26,16 @@ wheels/
 htmlcov/
 .hypothesis/
 
-# Outputs
-outputs/
-data/raw/
-data/processed/
+# Outputs (keep structure, ignore large files)
+outputs/*.csv
+outputs/logs/*.log
+outputs/checkpoints/
+outputs/coverage/
+
+# Data (large files)
+data/raw/*.xlsx
+data/raw/*.json
+data/processed/*.csv
 
 # IDEs
 .vscode/
@@ -37,6 +43,10 @@ data/processed/
 *.swp
 *.swo
 *~
+
+# Development artifacts
+.kiro/
+PROJECT_STATUS.md
 
 # Environment
 .env
@@ -50,3 +60,7 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
