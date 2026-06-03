@@ -47,6 +47,10 @@ data/processed/*.csv
 # Development artifacts
 .kiro/
 PROJECT_STATUS.md
+QUICK_START.md
+REPOSITORY_READY.txt
+run_with_llm.sh
+RUN_INSTRUCTIONS.md
 
 # Environment
 .env

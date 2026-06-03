@@ -111,6 +111,9 @@ class RealDataPipeline:
         timestamp_col = occupancy['timestamp']
         occupancy_matrix = occupancy.drop('timestamp', axis=1)
         
+        # Convert column names to int to match zone_capacity index
+        occupancy_matrix.columns = occupancy_matrix.columns.astype(int)
+        
         # Per-zone utilization (0-1 ratio)
         util_df = occupancy_matrix.div(zone_capacity, axis=1)
         
@@ -135,20 +138,24 @@ class RealDataPipeline:
         
         FIX 3: No time_step column - align on (hour_of_day, day_of_week, is_weekend)
         """
-        # Merge with time features
-        merged = utilization_df.merge(time_df, on='timestamp', how='left')
+        # Create datetime from time_df components
+        time_df = time_df.copy()
+        time_df['datetime'] = pd.to_datetime(time_df[['year', 'month', 'day', 'hour', 'minute', 'second']])
         
-        # Parse datetime
-        merged['datetime'] = pd.to_datetime(merged['timestamp'])
+        # Add timestamp column to time_df to match utilization_df
+        time_df['timestamp'] = range(1, len(time_df) + 1)
+        
+        # Merge with time features
+        merged = utilization_df.merge(time_df[['timestamp', 'datetime']], on='timestamp', how='left')
         
         # Extract temporal features
         merged['hour_of_day'] = merged['datetime'].dt.hour
         merged['day_of_week'] = merged['datetime'].dt.dayofweek
         merged['is_weekend'] = (merged['day_of_week'] >= 5).astype(int)
         
-        # Resample to hourly (5-min → 1H)
+        # Resample to hourly (5-min → 1h)
         merged = merged.set_index('datetime')
-        urban_hourly = merged.resample('1H').agg({
+        urban_hourly = merged.resample('1h').agg({
             'urban_mean_utilization': 'mean',
             'hour_of_day': 'first',
             'day_of_week': 'first',

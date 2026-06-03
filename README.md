@@ -4,8 +4,46 @@
 
 A fully autonomous multi-agent system for optimizing electric vehicle (EV) charging tariffs using real-world data from ACN-Data (Caltech) and UrbanEV (Shenzhen) datasets.
 
+---
+
+## 🚀 Quick Start
+
+**Complete project run in 4 steps (~3-5 minutes total):**
+
+```bash
+# 1. Activate virtual environment
+source .venv/bin/activate
+
+# 2. Optional - Enable LLM features (otherwise uses rule-based fallback)
+export GROQ_API_KEY='your-key-here'
+
+# 3. Run all steps
+python rebuild_data.py      # Data preprocessing (30-60s)
+python run_eda.py           # Generate visualizations (10-20s)
+python run_agentic.py       # Run optimization (1-3min)
+
+# 4. Verify results
+pytest tests/ -v            # Run tests (3-5s)
+```
+
+**One-line complete run:**
+```bash
+source .venv/bin/activate && python rebuild_data.py && python run_eda.py && python run_agentic.py && pytest tests/ -v
+```
+
+**Expected outputs:**
+- `data/processed/unified_analytical_base.csv` - 168 rows of unified data
+- `outputs/figures/*.png` - 6 visualization charts
+- `outputs/agentic_outcomes.csv` - 40 optimization steps with all metrics
+- All 29 tests passing ✅
+
+📖 **Detailed guide:** See [Usage](#usage) section below or `RUN_INSTRUCTIONS.md`
+
+---
+
 ## Table of Contents
 
+- [Quick Start](#-quick-start)
 - [Overview](#overview)
 - [System Architecture](#system-architecture)
 - [Key Features](#key-features)
