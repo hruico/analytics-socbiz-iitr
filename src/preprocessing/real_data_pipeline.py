@@ -240,7 +240,7 @@ def build_real_data_pipeline():
     pipeline = RealDataPipeline(baseline_tariff=15.0)
     
     unified = pipeline.build_unified_analytical_base(
-        acn_sessions_path="data/raw/acndata_sessions.json.xlsx",
+        acn_sessions_path="data/raw/acndata_sessions.json",  # Use JSON file
         urbanev_data_dir="data/raw",
         output_path="data/processed/unified_analytical_base.csv"
     )
