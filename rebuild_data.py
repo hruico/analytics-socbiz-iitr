@@ -124,4 +124,4 @@ if __name__ == "__main__":
     print(f"Utilization range: {unified['urban_mean_utilization'].min():.2%} - {unified['urban_mean_utilization'].max():.2%}")
     print(f"Peak hours (ACN): {acn_peak_hours}")
     print(f"Peak hours (UrbanEV): {urbanev_peak_hours}")
-    print("\nNext step: Run python run_agentic.py")
+    print("\nNext step: Run python run_eda.py")
