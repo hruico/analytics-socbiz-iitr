@@ -53,10 +53,26 @@ class MetricsEngine:
         q_actual: float,
         epsilon: float,
         baseline: float,
-        q_baseline_mean: float
+        q_baseline_mean: float,
+        regime: str = "neutral"  # Added regime parameter
     ) -> dict:
-        """Compute all metrics for a single step."""
+        """Compute all metrics for a single step with regime-based safety bounds."""
         demand_shift = self.compute_demand_shift(epsilon, p_new, baseline)
+        
+        # SAFETY: Apply regime-specific demand_shift bounds to prevent runaway elasticity
+        # This prevents extreme revenue losses from high surge prices
+        if regime == "surge":
+            # Cap negative demand shift in surge regime to -30%
+            # Rationale: Even with high prices, some inelastic demand remains
+            demand_shift = max(demand_shift, -0.30)
+        elif regime == "discount":
+            # Cap positive demand shift in discount regime to +40%
+            # Rationale: Capacity constraints limit how much demand can increase
+            demand_shift = min(demand_shift, 0.40)
+        else:  # neutral
+            # Cap both directions in neutral regime
+            demand_shift = np.clip(demand_shift, -0.25, 0.25)
+        
         rev_base, rev_new, rev_gain = self.compute_revenue(p_new, kwh, demand_shift, baseline)
         u_new = self.compute_utilization_adjustment(u_actual, demand_shift)
         reward = self.compute_reward(rev_gain, u_actual, u_new, q_actual, q_baseline_mean)

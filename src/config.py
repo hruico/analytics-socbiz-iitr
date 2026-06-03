@@ -8,15 +8,15 @@ class SystemConfig(BaseModel):
     """Configuration for the EV Tariff Optimization System."""
     
     # LLM Provider
-    llm_provider: Literal["openai", "anthropic", "ollama"] = "openai"
-    llm_model: str = "gpt-4o"
+    llm_provider: Literal["openai", "anthropic", "ollama", "groq"] = "ollama"
+    llm_model: str = "llama3.2:3b"
     
     # Geography-Aware Pricing
     baseline_tariff_per_kwh: float = Field(default=15.0, gt=0.0)
     pricing_bounds: Tuple[float, float] = Field(default=(10.0, 22.0))
     
     # Initial Parameters [epsilon, alpha, beta]
-    theta_init: Tuple[float, float, float] = (1.5, 2.5, 2.5)
+    theta_init: Tuple[float, float, float] = (0.25, 2.5, 2.5)
     
     # Convergence Criteria
     revenue_variance_threshold: float = 1.0

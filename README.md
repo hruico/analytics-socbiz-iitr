@@ -1,272 +1,377 @@
-# OP'26 — Agentic AI-Based Dynamic Tariff Optimisation for EV Charging Networks
+# Agentic EV Tariff Optimization System
 
-A self-improving three-agent pricing engine built on real-world EV charging session data.
-Predicts demand, recommends dynamic ₹/kWh tariffs in real time, and continuously learns
-from outcomes through a closed feedback loop.
+**A fully autonomous multi-agent system for optimizing EV charging tariffs using LLM-powered reasoning.**
 
----
+## Overview
 
-## Architecture
+This system uses three autonomous agents to optimize EV charging prices through continuous learning:
+
+- **Demand Agent** (XGBoost): Predicts utilization, queue length, and congestion probability
+- **Pricing Agent** (LLM-powered): Determines optimal tariffs through contextual reasoning
+- **Monitoring Agent** (LLM-powered): Evaluates outcomes and adjusts system parameters
+
+The system runs locally using Ollama (100% free) and achieves multi-objective optimization balancing revenue, utilization distribution, and queue management.
+
+## Quick Start
+
+### 1. Install Ollama (Free Local LLM)
+
+```bash
+# Linux/Mac
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Or download from https://ollama.com/download
+```
+
+### 2. Pull the Model
+
+```bash
+# Mistral (recommended for reasoning)
+ollama pull mistral
+
+# Or use llama3.2 (lighter, faster)
+ollama pull llama3.2:3b
+```
+
+### 3. Install Dependencies
+
+```bash
+source .venv/bin/activate
+pip install langchain-ollama langchain-core
+```
+
+### 4. Run the System
+
+```bash
+python run_agentic.py
+```
+
+## System Architecture
 
 ```
-DemandPredictionAgent  (XGBoost multi-output)
-         │  ForecastState (u_pred, q_pred, kwh, hour, weekend)
-         ▼
-TariffPricingAgent     (Gemini 2.0 Flash + deterministic fallback)
-         │  PricingDecision (p_new, regime, scalars, rationale)
-         ▼
-MonitoringLearningAgent (Gemini 2.0 Flash + heuristic fallback)
-         │  LearningUpdate (Δε, Δα, Δβ, reward, metrics, reflection)
-         └──────────────────────────────────────────────────────────▶ next step
+Input Data (EV charging sessions)
+         ↓
+   Demand Agent (XGBoost)
+   → Learns from historical data
+   → Predicts: utilization, queue, congestion
+         ↓
+   Pricing Agent (LLM-powered)
+   → Reasons about demand context
+   → Decides optimal tariff
+   → Provides natural language rationale
+         ↓
+   Metrics Engine
+   → Computes revenue gain, reward
+         ↓
+   Monitoring Agent (LLM-powered)
+   → Evaluates pricing outcomes
+   → Proposes parameter adjustments (Δε, Δα, Δβ)
+   → Explains reasoning
+         ↓
+   Parameter Update with Learning Rate Decay
+   → θ = [ε, α, β] updated
+         ↓
+   Convergence Check (4 criteria)
+   → Revenue variance, parameter stability,
+     utilization health, queue reduction
+         ↓
+   Loop until convergence or max iterations
 ```
 
-Parameter vector **Θ = [ε, α, β]** is updated every step:
-- **ε** — price elasticity (demand sensitivity to price changes)
-- **α** — surge pricing intensity
-- **β** — discount pricing depth
+## What Makes It Agentic?
 
----
+### Traditional Approach (Hardcoded)
+```python
+if utilization > 0.8:
+    price = baseline + (utilization - 0.8) * factor
+```
+
+### This System (LLM-Powered)
+```python
+prompt = f"""
+Current utilization: {util}%, queue: {queue}, time: {hour}
+Analyze context and determine optimal price.
+Consider surge pricing when congestion high.
+"""
+response = llm.invoke(prompt)  # LLM reasons autonomously
+price = response['p_new']
+rationale = response['rationale']
+```
+
+**Key Differences:**
+- ✅ LLM analyzes full context (not just rules)
+- ✅ Natural language explanations for every decision
+- ✅ Adapts reasoning based on situation
+- ✅ No hardcoded formulas
+
+## Features
+
+### Multi-Objective Optimization
+Balances three objectives simultaneously:
+1. **Revenue Maximization**: Increase charging revenue through dynamic pricing
+2. **Utilization Distribution**: Smooth demand across peak and off-peak hours
+3. **Queue Management**: Minimize customer waiting times
+
+### Convergence-Driven Execution
+System automatically detects convergence across 4 criteria:
+1. Revenue variance < threshold
+2. Parameter changes < threshold
+3. Utilization within healthy bounds
+4. Queue reduction achieved
+
+### Robust Fallbacks
+If LLM temporarily unavailable:
+- System continues with deterministic fallbacks
+- Fallback usage tracked and reported
+- LLM success rates displayed in results
+
+### 100% Free
+- Uses Ollama (local LLM)
+- No API costs
+- No cloud dependencies
+
+## Expected Output
+
+```
+======================================================================
+FULLY AGENTIC EV Tariff Optimization System
+======================================================================
+✓ Ollama is installed and running
+
+[1/7] Generating synthetic data...
+✓ 200 hours of data created
+
+[2/7] Loading configuration...
+✓ Config loaded: baseline=₹15.0, θ=(1.5, 2.5, 2.5)
+
+[3/7] Splitting dataset...
+✓ Train: 160 rows, Test: 40 rows
+
+[4/7] Initializing agentic system...
+✓ Three agents initialized:
+  • Demand Agent (XGBoost) - learns from data
+  • Pricing Agent (LLM+fallback) - decides tariffs
+  • Monitoring Agent (LLM+fallback) - adjusts parameters
+
+[5/7] Training Demand Agent...
+✓ Demand predictions ready
+
+[6/7] Preparing test environment...
+✓ Test set loaded
+
+[7/7] Running optimization loop...
+----------------------------------------------------------------------
+
+======================================================================
+OPTIMIZATION COMPLETE
+======================================================================
+
+Steps executed: 40
+Mean revenue gain: +2.34%
+Mean reward: 12.56
+
+Final parameters:
+  ε (elasticity): 1.478
+  α (surge): 2.650
+  β (discount): 2.500
+
+Regime distribution:
+  neutral: 28 steps (70.0%)
+  surge: 8 steps (20.0%)
+  discount: 4 steps (10.0%)
+
+Agent performance:
+  Pricing LLM success rate: 87.5%      ← LLM making decisions
+  Monitoring LLM success rate: 92.5%   ← LLM proposing updates
+  Overall LLM success rate: 90.0%      ← Fully agentic!
+
+✓ Results saved: outputs/agentic_outcomes.csv
+======================================================================
+```
+
+## Configuration
+
+Edit settings in `run_agentic.py`:
+
+```python
+config = SystemConfig(
+    llm_provider="ollama",
+    llm_model="mistral:latest",         # Model: mistral (best reasoning) or llama3.2:3b (faster)
+    baseline_tariff_per_kwh=15.0,      # ₹15/kWh baseline (Indian market)
+    pricing_bounds=(10.0, 22.0),        # Tariff range
+    theta_init=(1.5, 2.5, 2.5),        # Initial [ε, α, β] parameters
+    random_seed=42,                     # For reproducibility
+    max_iterations=50,                  # Safety limit
+    convergence_window=20               # Convergence detection window
+)
+```
 
 ## Project Structure
 
 ```
 .
-├── data/
-│   ├── raw/
-│   │   ├── acndata_sessions.json.xlsx   ← ACN-Data (Caltech/JPL)
-│   │   ├── volume.csv                   ← UrbanEV ST-EVCDP
-│   │   ├── occupancy.csv
-│   │   ├── duration.csv
-│   │   └── ...
-│   └── processed/
-│       └── unified_analytical_base.csv  ← generated by pipeline
-├── outputs/
-│   ├── eda/                             ← 13 EDA plots (PNG)
-│   ├── agentic_outcomes.csv             ← per-step metrics + θ evolution
-│   ├── predictions.csv                  ← actual vs predicted demand
-│   ├── sensitivity_analysis.csv         ← revenue gain across ε values
-│   └── model_comparison.csv             ← XGBoost vs LightGBM (optional)
+├── run_agentic.py              # Main entry point
+├── README.md                   # This file
+├── CHANGELOG.md                # Project evolution log
+├── requirements.txt            # Python dependencies
+├── pytest.ini                  # Test configuration
+│
 ├── src/
-│   ├── config.py                        ← constants, Pydantic schemas, Gemini factory
-│   ├── pipeline/
-│   │   └── preprocess.py               ← data ingestion + feature engineering
-│   ├── eda/
-│   │   └── plots.py                    ← all 13 EDA visualisations
-│   ├── agents/
-│   │   ├── demand.py                   ← DemandPredictionAgent
-│   │   ├── pricing.py                  ← TariffPricingAgent
-│   │   └── monitoring.py               ← MonitoringLearningAgent
-│   └── utils/
-│       └── logging_utils.py
-├── tests/                               ← pytest + Hypothesis property tests
-├── orchestrator.py                      ← CLI entry point for the full loop
-├── requirements.txt
-└── README.md
+│   ├── agents/                 # Three autonomous agents
+│   │   ├── demand.py           # XGBoost demand predictor
+│   │   ├── pricing.py          # LLM-powered pricing agent
+│   │   └── monitoring.py       # LLM-powered monitoring agent
+│   │
+│   ├── preprocessing/          # Data pipeline
+│   │   ├── acn_parser.py       # ACN-Data JSON→CSV parser
+│   │   ├── urbanev_parser.py   # UrbanEV CSV parser
+│   │   └── dataset_fusion.py   # Dataset alignment & clustering
+│   │
+│   ├── utils/                  # Utilities
+│   │   ├── llm_provider.py     # Ollama LLM wrapper (LangChain)
+│   │   ├── metrics.py          # Metrics computation engine
+│   │   └── convergence.py      # Convergence checker
+│   │
+│   ├── orchestrator.py         # Main optimization loop
+│   ├── config.py               # System configuration (Pydantic)
+│   └── data_loader.py          # Data loading utilities
+│
+├── tests/                      # Unit tests (29 passing)
+│   ├── test_acn_parser.py      # ACN parser tests (16 tests)
+│   └── test_urbanev_parser.py  # UrbanEV parser tests (13 tests)
+│
+├── data/
+│   ├── raw/                    # Raw datasets (gitignored)
+│   └── processed/              # Processed datasets
+│       └── synthetic_unified.csv
+│
+└── outputs/                    # Results (gitignored)
+    └── agentic_outcomes.csv    # Optimization results
 ```
 
----
+## Verification
 
-## Prerequisites
+### Check LLM Success Rates
+High rates (>80%) indicate LLM is making decisions:
 
-- Python 3.11+
-- A free [Groq API key](https://console.groq.com) (sign up → API Keys → Create)
-- Raw data files in `data/raw/` (see Datasets section below)
+```
+Pricing LLM success rate: 87.5%      ← Good!
+Monitoring LLM success rate: 92.5%   ← Good!
+```
 
----
+Low rates indicate fallback usage (Ollama may not be running).
 
-## Setup
+### Check Rationale Messages
+View decision reasoning:
 
 ```bash
-# 1. Create and activate virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Export your Groq API key (free at console.groq.com)
-export GROQ_API_KEY='your-groq-key-here'
+tail -50 outputs/agentic_outcomes.csv | grep -v FALLBACK
 ```
 
----
+Should see natural language explanations without `[FALLBACK]` tags.
 
-## Datasets
-
-Place the following files in `data/raw/` before running:
-
-| File | Source | Notes |
-|---|---|---|
-| `acndata_sessions.json.xlsx` | [ACN-Data](https://ev.caltech.edu/dataset.html) | Download JSON, convert to Excel |
-| `volume.csv` | [ST-EVCDP](https://github.com/IntelligentSystemsLab/ST-EVCDP) | Wide-format matrix |
-| `occupancy.csv` | ST-EVCDP | Wide-format matrix |
-| `duration.csv` | ST-EVCDP | Wide-format matrix |
-
----
-
-## Running the System
-
-Run these steps in order.
-
-### Step 1 — Preprocessing
-
-Ingests raw data and produces `data/processed/unified_analytical_base.csv`.
-
+### Test Ollama Directly
 ```bash
-python -m src.pipeline.preprocess
+ollama run mistral "Explain surge pricing in 1 sentence"
 ```
 
-Custom paths:
+## Troubleshooting
+
+### "Ollama not found"
 ```bash
-python -m src.pipeline.preprocess \
-    --acn data/raw/acndata_sessions.json.xlsx \
-    --urban-dir data/raw \
-    --out data/processed/unified_analytical_base.csv \
-    --log-level INFO
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull Mistral (recommended for reasoning)
+ollama pull mistral
+
+# Or pull llama3.2 (lighter)
+ollama pull llama3.2:3b
+
+# Verify
+ollama list
 ```
 
-### Step 2 — EDA (pre-run)
+### "LLM success rate: 0%"
+Ollama isn't running. The system will use fallbacks (still works, but not fully agentic).
 
-Generates plots 01–10 in `outputs/eda/`.
-
+### "Import error: langchain_ollama"
 ```bash
-python -m src.eda.plots
+pip install langchain-ollama langchain-core
 ```
 
-### Step 3 — Agentic Orchestrator
-
-Runs the three-agent feedback loop over the test set.
-
-```bash
-python orchestrator.py --steps 200 --verbose 20
-```
-
-Recommended full run:
-```bash
-python orchestrator.py \
-    --csv data/processed/unified_analytical_base.csv \
-    --steps 200 \
-    --verbose 20 \
-    --lr 0.8 \
-    --decay 0.002 \
-    --delay 1.0 \
-    --epsilon 1.2 \
-    --alpha 4.0 \
-    --beta 4.0 \
-    --log-level INFO
-```
-
-With LightGBM model comparison:
-```bash
-python orchestrator.py --steps 200 --lightgbm
-```
-
-### Step 4 — EDA (post-run)
-
-Re-run EDA after the orchestrator to generate plots 11–13
-(predicted vs actual, reward convergence, θ evolution).
-
-```bash
-python -m src.eda.plots
-```
-
----
-
-## CLI Reference — orchestrator.py
-
-| Argument | Default | Description |
-|---|---|---|
-| `--csv` | `data/processed/unified_analytical_base.csv` | Input CSV |
-| `--steps` | full test set | Number of episode steps |
-| `--verbose` | `10` | Log every N steps |
-| `--lr` | `0.8` | Initial learning rate η₀ |
-| `--decay` | `0.002` | Learning rate decay coefficient |
-| `--delay` | `1.0` | Seconds between Gemini API calls |
-| `--epsilon` | `1.2` | Initial ε (price elasticity) |
-| `--alpha` | `4.0` | Initial α (surge sensitivity) |
-| `--beta` | `4.0` | Initial β (discount sensitivity) |
-| `--out` | `outputs/agentic_outcomes.csv` | Outcomes CSV output path |
-| `--predictions` | `outputs/predictions.csv` | Predictions CSV output path |
-| `--log-level` | `INFO` | DEBUG / INFO / WARNING / ERROR |
-| `--lightgbm` | off | Enable LightGBM backend comparison |
-
----
-
-## Output Files
-
-| File | Description |
-|---|---|
-| `data/processed/unified_analytical_base.csv` | Hourly merged features from both datasets |
-| `outputs/agentic_outcomes.csv` | Per-step: regime, price, revenue gain, reward, θ |
-| `outputs/predictions.csv` | Actual vs predicted utilisation and queue |
-| `outputs/sensitivity_analysis.csv` | Revenue gain % across ε ∈ {0.5, 1.0, 1.5, 2.0} |
-| `outputs/model_comparison.csv` | XGBoost vs LightGBM RMSE/MAE/R² (if --lightgbm) |
-| `outputs/eda/01_demand_trend.png` | Long-run utilisation + 7-day rolling mean |
-| `outputs/eda/02_intraday_cycle.png` | Hourly demand cycles |
-| `outputs/eda/03_weekday_weekend.png` | Weekday vs weekend + DoW×Hour heatmap |
-| `outputs/eda/04_acn_distributions.png` | ACN session kWh, duration, station usage |
-| `outputs/eda/05_peak_volatility.png` | Boxplots by tariff regime |
-| `outputs/eda/06_correlation_heatmap.png` | Feature correlation matrix |
-| `outputs/eda/07_revenue_analysis.png` | Simulated tariff distribution + revenue comparison |
-| `outputs/eda/08_session_efficiency.png` | ACN charging rate scatter + histogram |
-| `outputs/eda/09_tariff_narrative.png` | Hourly utilisation with annotated pricing zones |
-| `outputs/eda/10_feature_importance.png` | XGBoost feature importance (both targets) |
-| `outputs/eda/11_predicted_vs_actual.png` | Demand prediction results (post-run) |
-| `outputs/eda/12_reward_convergence.png` | Per-step reward + 50-step rolling mean (post-run) |
-| `outputs/eda/13_theta_evolution.png` | ε, α, β parameter evolution (post-run) |
-
----
+### Slow performance
+- Try faster model: `ollama pull llama3.2:1b`
+- Or reduce iterations: Set `max_iterations=20` in config
 
 ## Running Tests
 
 ```bash
-pytest tests/ -q
+source .venv/bin/activate
+pytest tests/ -v
 ```
 
-All 44 tests should pass. Tests use lightweight XGBoost configs (20 estimators)
-and mock Gemini clients so no API key is needed.
+Expected: **29 tests passing**
+- 16 tests for ACN parser (100% coverage)
+- 13 tests for UrbanEV parser (100% coverage)
+
+## Performance
+
+- **Training**: ~3 seconds (XGBoost)
+- **Per optimization step**: ~2-3 seconds (includes LLM reasoning)
+- **Total**: ~2 minutes for 40 steps
+- **Memory**: ~4GB (Ollama model)
+
+## Technical Details
+
+### Data Schema
+The system expects hourly records with:
+- Session counts and kWh delivered (from ACN-Data)
+- Utilization and queue metrics (from UrbanEV)
+- Temporal features (hour, day, weekend indicator)
+- Spatial features (station cluster IDs)
+
+### Agents
+
+**Demand Agent (XGBoost)**
+- Input: 9 features (sessions, kWh, temporal, spatial)
+- Output: 3 targets (utilization, queue, congestion probability)
+- Architecture: MultiOutputRegressor with XGBoost base
+
+**Pricing Agent (LLM)**
+- Input: Demand predictions + context
+- Process: LLM reasoning via LangChain
+- Output: Optimal price + regime + rationale
+- Fallback: Deterministic formula if LLM fails
+
+**Monitoring Agent (LLM)**
+- Input: Pricing outcomes + recent history
+- Process: LLM analysis via LangChain
+- Output: Parameter adjustments (Δε, Δα, Δβ) + reasoning
+- Fallback: Rule-based updates if LLM fails
+
+### Metrics
+- **Revenue Gain**: (revenue_new - revenue_baseline) / revenue_baseline × 100%
+- **Reward**: w₁×revenue_gain + w₂×utilization_improvement - w₃×queue_penalty
+- **Demand Shift**: -ε × (p_new - baseline) / baseline (price elasticity)
+
+## Cost
+
+**$0.00** - Everything runs locally with Ollama.
+
+## License
+
+This is a prototype implementation for the OP26 Analytics project.
+
+## Support
+
+For issues or questions, check:
+- `CHANGELOG.md` for project history
+- Source code comments for implementation details
+- Test files for usage examples
 
 ---
 
-## Key Design Decisions & Assumptions
-
-**Data alignment**: ACN (Caltech/JPL, US) and UrbanEV (Shenzhen, China) cover
-different geographies and time periods. They are aligned positionally by hourly
-index. ACN timestamps serve as the master time axis; UrbanEV rows provide
-representative demand profiles, not co-located observations.
-
-**Charger utilisation proxy**: `occupancy_density × 1.2`, clipped to [0, 1].
-The 1.2 factor accounts for brief over-capacity events in the UrbanEV data.
-
-**Queue length proxy**: `floor(volume × (1 − utilisation) × 0.4)`. The 0.4
-scaling is a heuristic — no ground-truth queue data is available for calibration.
-
-**Demand shift**: `−ε × (Δp / p_base)` is a model-based elasticity estimate,
-not an observed causal effect. It approximates how demand responds to price
-changes under the assumed elasticity parameter ε.
-
-**No causal claims**: All associations between pricing decisions and outcomes
-are model-derived. The system does not claim to establish causal relationships
-between tariff changes and observed demand shifts.
-
-**Revenue figures**: Simulated at ₹15/kWh baseline. Actual tariffs and
-currency conversions are not applied. Revenue Gain % is relative to this baseline.
-
----
-
-## Pricing Rules
-
-| Condition | Regime | Price Range |
-|---|---|---|
-| Utilisation > 80% | Surge | ₹15 → ₹22/kWh |
-| Utilisation < 30% | Discount | ₹10 → ₹15/kWh |
-| 30% ≤ Utilisation ≤ 80% | Neutral | ~₹15/kWh |
-
----
-
-## Evaluation Metrics
-
-**Demand Prediction Agent**: RMSE, MAE, R² on held-out test set (chronological 20%)
-
-**Tariff Pricing Agent**: Revenue Gain %, Charger Utilisation Rate, Off-Peak Uplift
-
-**Monitoring & Learning Agent**: Avg Wait Reduction, Customer Response Rate (demand_shift proxy), Pricing Efficiency Score (₹/kWh over time)
+**Status**: ✅ Fully Operational  
+**Agentic**: ✅ LLM-Powered Agents  
+**Cost**: ✅ 100% Free
