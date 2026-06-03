@@ -97,12 +97,39 @@ def main():
     # Check Groq API key availability
     groq_available = check_groq_api_key()
     
-    # Generate synthetic data
-    logger.info("\n[1/7] Generating synthetic data...")
-    df = generate_synthetic_data(n_hours=200)
-    Path("data/processed").mkdir(parents=True, exist_ok=True)
-    df.to_csv("data/processed/synthetic_unified.csv", index=False)
-    logger.info(f"✓ {len(df)} hours of data created")
+    # PROBLEM 1 FIX: Load real data instead of generating synthetic
+    logger.info("\n[1/7] Loading real unified analytical base...")
+    unified_path = "data/processed/unified_analytical_base.csv"
+    if not Path(unified_path).exists():
+        logger.error(f"❌ {unified_path} not found. Run rebuild_data.py first.")
+        return 1
+    df = pd.read_csv(unified_path)
+    logger.info(f"✓ {len(df)} hours of real data loaded from {unified_path}")
+    
+    # PROBLEM 9 FIX: Verify regime distribution has non-zero surge timesteps
+    logger.info("\n[1.5/7] Verifying regime distribution...")
+    surge_threshold = 0.80
+    discount_threshold = 0.30
+    
+    surge_count = (df['urban_mean_utilization'] > surge_threshold).sum()
+    discount_count = (df['urban_mean_utilization'] < discount_threshold).sum()
+    neutral_count = len(df) - surge_count - discount_count
+    
+    logger.info(f"  Surge (>{surge_threshold:.0%}): {surge_count} timesteps ({surge_count/len(df)*100:.1f}%)")
+    logger.info(f"  Discount (<{discount_threshold:.0%}): {discount_count} timesteps ({discount_count/len(df)*100:.1f}%)")
+    logger.info(f"  Neutral: {neutral_count} timesteps ({neutral_count/len(df)*100:.1f}%)")
+    
+    if surge_count == 0:
+        p90 = df['urban_mean_utilization'].quantile(0.90)
+        p25 = df['urban_mean_utilization'].quantile(0.25)
+        logger.warning(f"⚠️  0% surge timesteps with threshold {surge_threshold:.0%}")
+        logger.warning(f"⚠️  Suggested thresholds: surge >{p90:.1%} (P90), discount <{p25:.1%} (P25)")
+        logger.warning(f"⚠️  Proceeding with 0% surge (no surge pricing will occur)")
+    
+    target_surge_pct = 10.0
+    if surge_count / len(df) * 100 < target_surge_pct:
+        logger.warning(f"⚠️  Surge percentage ({surge_count/len(df)*100:.1f}%) below target ({target_surge_pct}%)")
+        logger.warning(f"⚠️  Consider lowering surge threshold or using peak-zone utilization")
     
     # Load configuration
     logger.info("\n[2/7] Loading configuration...")

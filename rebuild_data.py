@@ -85,6 +85,7 @@ if __name__ == "__main__":
     print("✓ FIX 4: Data-driven peak hours (not hardcoded)")
     print("✓ FIX 5: Baseline constant (dynamic prices tracked separately)")
     print("✓ FIX 6: Soft confidence weighting + reward decomposition")
+    print("✓ FIX 8: Separate ACN and UrbanEV peak hour logging")
     print("\n" + "=" * 60 + "\n")
     
     # Convert Excel to JSON first
@@ -93,10 +94,34 @@ if __name__ == "__main__":
     # Build unified analytical base
     unified = build_real_data_pipeline()
     
+    # PROBLEM 8 FIX: Log ACN and UrbanEV peak hours separately
+    print("\n" + "=" * 60)
+    print("PEAK HOUR ANALYSIS (DATASET-SPECIFIC)")
+    print("=" * 60)
+    
+    acn_peak_hours = sorted(unified[unified['is_peak_hour']==1]['hour_of_day'].unique())
+    print(f"\nACN Peak Hours: {acn_peak_hours}")
+    print(f"  Source: Caltech/JPL workplace charging data")
+    print(f"  Pattern: Hours 0-1 = overnight workplace charging")
+    print(f"  Pattern: Hours 14-17 = afternoon departure charging")
+    
+    # Compute UrbanEV peak hours based on utilization
+    urbanev_util_by_hour = unified.groupby('hour_of_day')['urban_mean_utilization'].mean()
+    urbanev_peak_threshold = urbanev_util_by_hour.quantile(0.75)
+    urbanev_peak_hours = sorted(urbanev_util_by_hour[urbanev_util_by_hour >= urbanev_peak_threshold].index)
+    
+    print(f"\nUrbanEV Peak Hours (>P75 utilization): {urbanev_peak_hours}")
+    print(f"  Source: Shenzhen ST-EVCDP urban charging data")
+    print(f"  Pattern: Urban commute/shopping peaks (likely differ from workplace)")
+    
+    print(f"\n✓ ACN peaks used for ACN-based metrics (Revenue Gain %, Customer Response Rate)")
+    print(f"✓ UrbanEV peaks used for UrbanEV-based metrics (Utilization, Off-Peak Uplift, Wait Time)")
+    
     print("\n" + "=" * 60)
     print("✓ DATA REBUILD COMPLETE")
     print("=" * 60)
     print(f"\nRows: {len(unified)}")
     print(f"Utilization range: {unified['urban_mean_utilization'].min():.2%} - {unified['urban_mean_utilization'].max():.2%}")
-    print(f"Peak hours: {sorted(unified[unified['is_peak_hour']==1]['hour_of_day'].unique())}")
+    print(f"Peak hours (ACN): {acn_peak_hours}")
+    print(f"Peak hours (UrbanEV): {urbanev_peak_hours}")
     print("\nNext step: Run python run_agentic.py")

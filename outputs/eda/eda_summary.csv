@@ -3,11 +3,11 @@ Total Records,168
 Total Sessions,14999
 Total Energy (kWh),135027.98323289686
 Total Baseline Revenue (₹),2025419.748493453
-Mean Utilization,28.0%
+Mean Utilization,89.3%
 Peak Hour Count,6
-Surge Timesteps,0
-Discount Timesteps,106
-Neutral Timesteps,62
+Surge Timesteps,145
+Discount Timesteps,0
+Neutral Timesteps,23
 Peak Hours,"[np.int64(0), np.int64(1), np.int64(14), np.int64(15), np.int64(16), np.int64(17)]"
 Mean Sessions per Hour,89.28
 Mean Revenue per Hour (₹),12056.07

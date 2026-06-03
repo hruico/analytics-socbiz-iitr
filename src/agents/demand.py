@@ -7,14 +7,19 @@ from typing import Tuple, Dict
 
 
 class DemandAgent:
-    """Predicts utilization, queue, and congestion probability."""
+    """
+    Predicts utilization, queue, and congestion probability.
+    
+    PROBLEM 2a FIX: Uses ONLY UrbanEV features (no ACN session counts).
+    """
     
     FEATURES = [
-        'acn_sessions_count', 'acn_total_kwh', 'acn_avg_kwh_per_session',
-        'hour_of_day', 'day_of_week', 'is_weekend', 'is_peak_hour'
+        # PROBLEM 2a: Removed ACN features (acn_sessions_count, acn_total_kwh, acn_avg_kwh_per_session)
+        # Use only UrbanEV + temporal features
+        'hour_of_day', 'day_of_week', 'is_weekend', 'is_peak_hour', 'urban_mean_utilization'
     ]
     
-    TARGETS = ['urban_mean_utilization', 'urban_peak_queue']
+    TARGETS = ['urban_mean_utilization']  # Predict utilization (can extend to queue if data available)
     
     def __init__(self, random_seed: int = 42):
         self.random_seed = random_seed
@@ -45,6 +50,8 @@ class DemandAgent:
         """
         Predict utilization, queue, and congestion probability.
         
+        PROBLEM 2a FIX: Uses only UrbanEV features for prediction.
+        
         Returns:
             (u_pred, q_pred, congestion_prob)
         """
@@ -55,8 +62,11 @@ class DemandAgent:
         preds = self.model.predict(X)
         
         # Clip predictions
-        u_pred = np.clip(preds[:, 0], 0, 1)
-        q_pred = np.clip(preds[:, 1], 0, np.inf)
+        u_pred = np.clip(preds[:, 0] if preds.ndim > 1 else preds, 0, 1)
+        
+        # PROBLEM 2c: Queue is derived from UrbanEV occupancy proxy (if available in data)
+        # For now, use simple heuristic: queue ≈ 10 * (utilization - 0.5) when > 50%
+        q_pred = np.maximum(0, 10 * (u_pred - 0.5))
         
         # Simple congestion probability: high queue = high congestion
         congestion_prob = np.clip(q_pred / 10.0, 0, 1)

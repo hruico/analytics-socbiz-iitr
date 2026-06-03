@@ -38,12 +38,36 @@ class MetricsEngine:
         u_new: float,
         q_actual: float,
         q_baseline_mean: float
-    ) -> float:
-        """Compute multi-objective reward."""
-        utilization_improvement = (u_new - u_baseline) * 100
-        queue_penalty = max(0, q_actual - q_baseline_mean) * 100
+    ) -> dict:
+        """
+        PROBLEM 5 FIX: Compute multi-objective reward with normalization and decomposition.
         
-        return self.w1 * revenue_gain_pct + self.w2 * utilization_improvement - self.w3 * queue_penalty
+        All components are normalized to percentage scale (0-100) before summing.
+        Weights sum to 1.0 (default: w1=0.33, w2=0.33, w3=0.33).
+        
+        Returns:
+            dict with reward and decomposition
+        """
+        # Component 1: Revenue gain (already in %)
+        revenue_component = revenue_gain_pct  # Range: -100 to +100
+        
+        # Component 2: Utilization improvement (convert to %)
+        utilization_improvement = (u_new - u_baseline) * 100  # Range: -100 to +100
+        
+        # Component 3: Congestion penalty (normalize to %)
+        # queue delta normalized by baseline, capped at 100%
+        queue_delta = (q_actual - q_baseline_mean) / max(q_baseline_mean, 0.1)
+        congestion_penalty = min(queue_delta * 100, 100)  # Cap at 100%
+        
+        # Combine with normalized weights
+        reward = self.w1 * revenue_component + self.w2 * utilization_improvement - self.w3 * congestion_penalty
+        
+        return {
+            'reward': reward,
+            'revenue_component': revenue_component,
+            'utilization_component': utilization_improvement,
+            'congestion_component': congestion_penalty
+        }
     
     def compute_step_metrics(
         self,
@@ -75,7 +99,9 @@ class MetricsEngine:
         
         rev_base, rev_new, rev_gain = self.compute_revenue(p_new, kwh, demand_shift, baseline)
         u_new = self.compute_utilization_adjustment(u_actual, demand_shift)
-        reward = self.compute_reward(rev_gain, u_actual, u_new, q_actual, q_baseline_mean)
+        
+        # PROBLEM 5 FIX: Get reward with decomposition
+        reward_result = self.compute_reward(rev_gain, u_actual, u_new, q_actual, q_baseline_mean)
         
         return {
             'demand_shift': demand_shift,
@@ -83,6 +109,9 @@ class MetricsEngine:
             'revenue_new': rev_new,
             'revenue_gain_pct': rev_gain,
             'utilization_new': u_new,
-            'reward': reward,
+            'reward': reward_result['reward'],
+            'reward_revenue_component': reward_result['revenue_component'],
+            'reward_utilization_component': reward_result['utilization_component'],
+            'reward_congestion_component': reward_result['congestion_component'],
             'pricing_efficiency': rev_new / kwh if kwh > 0 else 0
         }

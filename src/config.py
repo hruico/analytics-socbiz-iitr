@@ -31,8 +31,11 @@ class SystemConfig(BaseModel):
     learning_rate_init: float = 0.1
     learning_rate_decay: float = 0.001
     
-    # Reward Weights [w1, w2, w3]
-    reward_weights: Tuple[float, float, float] = (1.0, 0.5, 0.3)
+    # Reward Weights [w1, w2, w3] - PROBLEM 5 FIX: Normalized to sum to 1.0
+    # w1: revenue gain component weight
+    # w2: utilization improvement weight  
+    # w3: congestion penalty weight
+    reward_weights: Tuple[float, float, float] = (0.33, 0.33, 0.34)  # Sum = 1.0
     
     # Reproducibility
     random_seed: int = 42

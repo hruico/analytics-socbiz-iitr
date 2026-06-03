@@ -32,6 +32,17 @@ print(f"✓ Loaded {len(df)} records")
 print(f"  Columns: {list(df.columns)}")
 print(f"  Date range: {df['time_step'].min()} to {df['time_step'].max()} steps")
 
+# PROBLEM 6 FIX: Separate ACN and UrbanEV columns
+acn_columns = [c for c in df.columns if c.startswith('acn_') or c in ['time_step', 'hour_of_day', 'day_of_week', 'is_weekend', 'is_peak_hour']]
+urbanev_columns = [c for c in df.columns if c.startswith('urban_') or c in ['time_step', 'hour_of_day', 'day_of_week', 'is_weekend', 'is_peak_hour']]
+
+df_acn = df[acn_columns].copy()
+df_urbanev = df[urbanev_columns].copy()
+
+print(f"\n✓ Separated datasets:")
+print(f"  ACN columns: {[c for c in acn_columns if c.startswith('acn_')]}")
+print(f"  UrbanEV columns: {[c for c in urbanev_columns if c.startswith('urban_')]}")
+
 # Basic statistics
 print("\n[2/9] Computing summary statistics...")
 summary_stats = df.describe()
@@ -43,6 +54,53 @@ print(f"  Sessions: {df['acn_sessions_count'].sum():.0f} total, {df['acn_session
 print(f"  Energy: {df['acn_total_kwh'].sum():.0f} kWh total, {df['acn_total_kwh'].mean():.1f} kWh/hour")
 print(f"  Utilization: {df['urban_mean_utilization'].mean():.1%} mean, [{df['urban_mean_utilization'].min():.1%} - {df['urban_mean_utilization'].max():.1%}] range")
 print(f"  Revenue: ₹{df['acn_base_revenue'].sum():.0f} total, ₹{df['acn_base_revenue'].mean():.1f} avg/hour")
+
+# PROBLEM 6 FIX: Section A — ACN Analysis
+print("\n" + "=" * 70)
+print("SECTION A: ACN ANALYSIS (US Workplace Charging)")
+print("=" * 70)
+print(f"\nACN Dataset (Caltech/JPL):")
+print(f"  Total sessions: {df['acn_sessions_count'].sum():.0f}")
+print(f"  Total energy: {df['acn_total_kwh'].sum():.0f} kWh")
+print(f"  Avg kWh per session: {df['acn_avg_kwh_per_session'].mean():.2f} kWh")
+print(f"  Total baseline revenue: ₹{df['acn_base_revenue'].sum():.0f}")
+print(f"  Revenue per session: ₹{(df['acn_base_revenue'] / df['acn_sessions_count'].replace(0, np.nan)).mean():.2f}")
+
+# ACN peak hours (data-driven)
+acn_peak_hours = sorted(df[df['is_peak_hour']==1]['hour_of_day'].unique())
+print(f"\nACN Peak Hours (data-driven): {acn_peak_hours}")
+print(f"  Note: Hours 0-1 reflect overnight workplace charging behavior (Caltech)")
+print(f"  Note: Hours 14-17 reflect afternoon departure charging")
+
+# PROBLEM 6 FIX: Section B — UrbanEV Analysis
+print("\n" + "=" * 70)
+print("SECTION B: URBANEV ANALYSIS (Urban China Charging)")
+print("=" * 70)
+print(f"\nUrbanEV Dataset (Shenzhen ST-EVCDP):")
+print(f"  Mean utilization: {df['urban_mean_utilization'].mean():.1%}")
+print(f"  Utilization range: [{df['urban_mean_utilization'].min():.1%}, {df['urban_mean_utilization'].max():.1%}]")
+print(f"  Std deviation: {df['urban_mean_utilization'].std():.1%}")
+
+# UrbanEV peak hours (may differ from ACN)
+urbanev_util_by_hour = df.groupby('hour_of_day')['urban_mean_utilization'].mean()
+urbanev_peak_threshold = urbanev_util_by_hour.quantile(0.75)
+urbanev_peak_hours = sorted(urbanev_util_by_hour[urbanev_util_by_hour >= urbanev_peak_threshold].index)
+print(f"\nUrbanEV Peak Hours (>P75 utilization): {urbanev_peak_hours}")
+print(f"  Note: Urban charging peaks likely differ from workplace charging")
+
+# PROBLEM 6 FIX: Section C — Cross-dataset Comparison
+print("\n" + "=" * 70)
+print("SECTION C: CROSS-DATASET COMPARISON")
+print("=" * 70)
+print("\nTemporal Pattern Differences:")
+print(f"  ACN peaks: {acn_peak_hours} (overnight workplace + afternoon departure)")
+print(f"  UrbanEV peaks: {urbanev_peak_hours} (urban commute/shopping patterns)")
+print("\nPricing Implications:")
+print("  • ACN overnight peaks (0-1) suggest workplace charging tariffs")
+print("  • UrbanEV urban peaks suggest commute-time surge pricing")
+print("  • Different geographies → different optimal pricing strategies")
+print("  • Unified model must account for behavioral differences")
+print("=" * 70)
 
 # 1. TEMPORAL PATTERNS - Intraday
 print("\n[3/9] Analyzing temporal patterns...")
@@ -296,38 +354,67 @@ print("\n[9/9] Generating insights summary...")
 
 insights = []
 
+# PROBLEM 6 FIX: Separate ACN and UrbanEV insights
+insights.append("=" * 70)
+insights.append("SECTION A: ACN INSIGHTS (Caltech/JPL Workplace Charging)")
+insights.append("=" * 70)
+
 # Peak hours
-insights.append(f"Peak Hours: {peak_hours}")
-insights.append(f"Peak hours account for {(df['is_peak_hour'].sum()/len(df)*100):.1f}% of timesteps but {(df[df['is_peak_hour']==1]['acn_sessions_count'].sum()/df['acn_sessions_count'].sum()*100):.1f}% of sessions")
+insights.append(f"\nACN Peak Hours: {peak_hours}")
+insights.append(f"  Pattern: Hours 0-1 = overnight workplace charging (Caltech behavior)")
+insights.append(f"  Pattern: Hours 14-17 = afternoon departure charging")
+insights.append(f"  Peak hours account for {(df['is_peak_hour'].sum()/len(df)*100):.1f}% of timesteps but {(df[df['is_peak_hour']==1]['acn_sessions_count'].sum()/df['acn_sessions_count'].sum()*100):.1f}% of sessions")
+
+# ACN-specific metrics
+insights.append(f"\nACN Session Metrics:")
+insights.append(f"  Total sessions: {df['acn_sessions_count'].sum():.0f}")
+insights.append(f"  Avg sessions per hour: {df['acn_sessions_count'].mean():.1f}")
+insights.append(f"  Avg kWh per session: {df['acn_avg_kwh_per_session'].mean():.2f} kWh")
+
+# ACN-specific metrics - compute total_revenue here
+total_revenue = df['acn_base_revenue'].sum()
+
+insights.append(f"\nACN Revenue Metrics (Baseline ₹15/kWh):")
+insights.append(f"  Total baseline revenue: ₹{total_revenue:.0f}")
+insights.append(f"  Average revenue per hour: ₹{df['acn_base_revenue'].mean():.2f}")
+insights.append(f"  Average revenue per session: ₹{revenue_per_session.mean():.2f}")
+
+insights.append("\n" + "=" * 70)
+insights.append("SECTION B: URBANEV INSIGHTS (Shenzhen Urban Charging)")
+insights.append("=" * 70)
 
 # Utilization
-insights.append(f"\nUtilization Statistics:")
+insights.append(f"\nUrbanEV Utilization Statistics:")
 insights.append(f"  Mean: {df['urban_mean_utilization'].mean():.1%}")
 insights.append(f"  Std: {df['urban_mean_utilization'].std():.1%}")
 insights.append(f"  Range: [{df['urban_mean_utilization'].min():.1%}, {df['urban_mean_utilization'].max():.1%}]")
 insights.append(f"  Regime distribution: Discount={regime_counts.get('Discount (<30%)', 0)}, Neutral={regime_counts.get('Neutral (30-80%)', 0)}, Surge={regime_counts.get('Surge (>80%)', 0)}")
 
-# Revenue
-total_revenue = df['acn_base_revenue'].sum()
-insights.append(f"\nRevenue Metrics:")
-insights.append(f"  Total baseline revenue: ₹{total_revenue:.0f}")
-insights.append(f"  Average revenue per hour: ₹{df['acn_base_revenue'].mean():.2f}")
-insights.append(f"  Average revenue per session: ₹{revenue_per_session.mean():.2f}")
-
 # Temporal patterns
 peak_hour_util = df[df['is_peak_hour']==1]['urban_mean_utilization'].mean()
 offpeak_hour_util = df[df['is_peak_hour']==0]['urban_mean_utilization'].mean()
-insights.append(f"\nTemporal Patterns:")
+insights.append(f"\nUrbanEV Temporal Patterns:")
 insights.append(f"  Peak hour utilization: {peak_hour_util:.1%}")
 insights.append(f"  Off-peak utilization: {offpeak_hour_util:.1%}")
-insights.append(f"  Weekday avg sessions: {df[df['is_weekend']==0]['acn_sessions_count'].mean():.1f}")
-insights.append(f"  Weekend avg sessions: {df[df['is_weekend']==1]['acn_sessions_count'].mean():.1f}")
+insights.append(f"  Weekday avg utilization: {df[df['is_weekend']==0]['urban_mean_utilization'].mean():.1%}")
+insights.append(f"  Weekend avg utilization: {df[df['is_weekend']==1]['urban_mean_utilization'].mean():.1%}")
 
-# Pricing implications
+insights.append("\n" + "=" * 70)
+insights.append("SECTION C: CROSS-DATASET COMPARISON & PRICING IMPLICATIONS")
+insights.append("=" * 70)
+
+insights.append(f"\nTemporal Pattern Differences:")
+insights.append(f"  ACN peaks (US workplace): {peak_hours}")
+insights.append(f"  UrbanEV peaks differ based on urban behavior (commute/shopping)")
+insights.append(f"  Geographic context: Caltech (US) vs Shenzhen (China)")
+
 insights.append(f"\nPricing Implications:")
-insights.append(f"  {regime_counts.get('Surge (>80%)', 0)} timesteps ({regime_counts.get('Surge (>80%)', 0)/len(df)*100:.1f}%) qualify for surge pricing")
-insights.append(f"  {regime_counts.get('Discount (<30%)', 0)} timesteps ({regime_counts.get('Discount (<30%)', 0)/len(df)*100:.1f}%) qualify for discount pricing")
-insights.append(f"  Neutral pricing applies to {regime_counts.get('Neutral (30-80%)', 0)/len(df)*100:.1f}% of timesteps")
+insights.append(f"  • {regime_counts.get('Surge (>80%)', 0)} timesteps ({regime_counts.get('Surge (>80%)', 0)/len(df)*100:.1f}%) qualify for surge pricing")
+insights.append(f"  • {regime_counts.get('Discount (<30%)', 0)} timesteps ({regime_counts.get('Discount (<30%)', 0)/len(df)*100:.1f}%) qualify for discount pricing")
+insights.append(f"  • Neutral pricing applies to {regime_counts.get('Neutral (30-80%)', 0)/len(df)*100:.1f}% of timesteps")
+insights.append(f"  • ACN overnight peaks suggest workplace tariff optimization")
+insights.append(f"  • UrbanEV patterns suggest commute-time surge opportunities")
+insights.append(f"  • Different datasets require different pricing strategies")
 
 insights_text = '\n'.join(insights)
 print(insights_text)

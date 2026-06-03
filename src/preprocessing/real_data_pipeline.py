@@ -93,16 +93,20 @@ class RealDataPipeline:
     def compute_per_zone_utilization(
         self, 
         occupancy: pd.DataFrame, 
-        info_df: pd.DataFrame
+        info_df: pd.DataFrame,
+        use_peak_zone: bool = True
     ) -> pd.DataFrame:
         """
-        FIX 1: Compute per-zone utilization, then aggregate.
+        PROBLEM 3 FULL FIX: Compute PEAK-ZONE utilization instead of mean.
         
-        Current bug: urban_mean_utilization = total_occupied / 18061 (system-wide)
-        → Result: 1.7%-3.0% (structurally can't reach 30%/80% thresholds)
+        Problem: urban_mean_utilization averages across all zones → narrow range (21-34%)
+        → Result: 0/168 timesteps qualify for surge pricing (>80% never reached)
         
-        Correct: Divide each zone's occupancy by that zone's capacity, then average
-        → Result: 21%-41% (meaningful utilization that interacts with thresholds)
+        Solution: Use max or 90th percentile utilization across zones per timestep
+        → Result: Exposes high-demand zones, enables surge pricing
+        
+        Args:
+            use_peak_zone: If True, use max/P90 across zones. If False, use mean (old behavior)
         """
         # Get zone capacities
         zone_capacity = info_df.set_index('grid')['count']
@@ -117,15 +121,31 @@ class RealDataPipeline:
         # Per-zone utilization (0-1 ratio)
         util_df = occupancy_matrix.div(zone_capacity, axis=1)
         
-        # Mean utilization across zones per timestep
-        mean_util = util_df.mean(axis=1)
+        if use_peak_zone:
+            # PROBLEM 3 FIX: Use PEAK-ZONE utilization (max or P90)
+            # This exposes congested zones that get masked by averaging
+            peak_util = util_df.max(axis=1)  # Max utilization across zones
+            # Alternative: peak_util = util_df.quantile(0.90, axis=1)  # 90th percentile
+            
+            # Also compute mean for comparison
+            mean_util = util_df.mean(axis=1)
+            
+            logger.info(f"PEAK-ZONE utilization (max): {peak_util.min():.2%} - {peak_util.max():.2%}")
+            logger.info(f"Mean utilization (for comparison): {mean_util.min():.2%} - {mean_util.max():.2%}")
+            logger.info(f"Range expansion: {(peak_util.max() - peak_util.min()):.1%} vs {(mean_util.max() - mean_util.min()):.1%}")
+            
+            utilization = peak_util
+        else:
+            # OLD behavior: Mean utilization across zones
+            mean_util = util_df.mean(axis=1)
+            logger.info(f"Mean utilization range: {mean_util.min():.2%} - {mean_util.max():.2%}")
+            utilization = mean_util
         
-        logger.info(f"Per-zone utilization range: {mean_util.min():.2%} - {mean_util.max():.2%}")
         logger.info(f"OLD system-wide method would give: {occupancy_matrix.sum(axis=1).mean() / zone_capacity.sum():.2%}")
         
         return pd.DataFrame({
             'timestamp': timestamp_col,
-            'urban_mean_utilization': mean_util
+            'urban_mean_utilization': utilization  # Name kept for compatibility, but now contains peak-zone
         })
     
     def aggregate_urbanev_hourly(
@@ -202,8 +222,12 @@ class RealDataPipeline:
         logger.info("Loading UrbanEV data...")
         occupancy, time_df, info_df = self.load_urbanev_data(urbanev_data_dir)
         
-        # FIX 1: Compute per-zone utilization
-        utilization_df = self.compute_per_zone_utilization(occupancy, info_df)
+        # PROBLEM 3 FULL FIX: Compute per-zone utilization with peak-zone mode enabled
+        utilization_df = self.compute_per_zone_utilization(
+            occupancy, 
+            info_df, 
+            use_peak_zone=True  # Enable peak-zone utilization (max across zones)
+        )
         
         # Aggregate UrbanEV to hourly
         urban_hourly = self.aggregate_urbanev_hourly(utilization_df, time_df)

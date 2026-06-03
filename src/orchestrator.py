@@ -66,7 +66,15 @@ class SystemOrchestrator:
         )
         
         # Set baseline queue for convergence
-        baseline_queue = test_df['urban_peak_queue'].mean()
+        # PROBLEM 2c FIX: Queue derived from UrbanEV utilization if not available
+        if 'urban_peak_queue' in test_df.columns:
+            baseline_queue = test_df['urban_peak_queue'].mean()
+        else:
+            # Compute queue proxy from utilization: queue ≈ 10 * (util - 0.5) when > 50%
+            queue_proxy = test_df['urban_mean_utilization'].apply(lambda u: max(0, 10 * (u - 0.5)))
+            baseline_queue = queue_proxy.mean()
+            logger.info(f"urban_peak_queue not in data, using utilization-based proxy (mean={baseline_queue:.2f})")
+        
         self.convergence_checker.set_baseline_queue(baseline_queue)
         
         logger.info(f"Test set prepared: {len(test_df)} rows, LLM={'enabled' if self.llm else 'disabled'}")
@@ -81,9 +89,13 @@ class SystemOrchestrator:
         for step in range(min(len(self.test_df), self.config.max_iterations)):
             row = self.test_df.iloc[step]
             
-            # Fix queue actual fallback: use q_pred when data is zero
-            q_actual_raw = row['urban_peak_queue']
-            q_actual = q_actual_raw if q_actual_raw > 0 else q_pred[step]
+            # Fix queue actual fallback: use q_pred when data is zero or missing
+            if 'urban_peak_queue' in row.index:
+                q_actual_raw = row['urban_peak_queue']
+                q_actual = q_actual_raw if q_actual_raw > 0 else q_pred[step]
+            else:
+                # PROBLEM 2c FIX: Compute queue proxy from utilization
+                q_actual = max(0, 10 * (row['urban_mean_utilization'] - 0.5))
             
             # Get pricing decision
             decision = self.pricing_agent.compute_tariff(
@@ -127,7 +139,14 @@ class SystemOrchestrator:
                 'epsilon': self.pricing_agent.theta[0],
                 'alpha': self.pricing_agent.theta[1],
                 'beta': self.pricing_agent.theta[2],
-                'fallback_used': decision.fallback_used
+                'fallback_used': decision.fallback_used,
+                # PROBLEM 10 FIX: Add enhanced columns
+                'data_source': 'unified',  # 'ACN' for revenue metrics, 'UrbanEV' for utilization
+                'utilization_value': row['urban_mean_utilization'],
+                'price_applied': decision.p_new,
+                'revenue_this_step': metrics['revenue_new'],
+                'hour_of_day': row['hour_of_day'],
+                'is_peak_hour': row['is_peak_hour']
             })
             
             # Build history for monitoring agent
@@ -169,9 +188,13 @@ class SystemOrchestrator:
                 logger.info(f"Converged at step {step}")
                 break
             
-            if (step + 1) % 100 == 0:
+            # PROBLEM 5 FIX: Log reward decomposition every 10 steps
+            if (step + 1) % 10 == 0:
                 logger.info(f"Step {step + 1}: revenue_gain={metrics['revenue_gain_pct']:.2f}%, "
-                           f"reward={metrics['reward']:.2f}")
+                           f"reward={metrics['reward']:.2f} "
+                           f"[rev:{metrics['reward_revenue_component']:.1f}, "
+                           f"util:{metrics['reward_utilization_component']:.1f}, "
+                           f"cong:{metrics['reward_congestion_component']:.1f}]")
         
         outcomes_df = pd.DataFrame(self.outcomes)
         logger.info(f"Optimization complete: {len(outcomes_df)} steps")

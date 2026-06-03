@@ -1,27 +1,54 @@
 EV CHARGING DATA - KEY INSIGHTS
 ======================================================================
 
-Peak Hours: [np.int64(0), np.int64(1), np.int64(14), np.int64(15), np.int64(16), np.int64(17)]
-Peak hours account for 25.0% of timesteps but 55.7% of sessions
+======================================================================
+SECTION A: ACN INSIGHTS (Caltech/JPL Workplace Charging)
+======================================================================
 
-Utilization Statistics:
-  Mean: 28.0%
-  Std: 4.0%
-  Range: [22.0%, 34.5%]
-  Regime distribution: Discount=106, Neutral=62, Surge=0
+ACN Peak Hours: [np.int64(0), np.int64(1), np.int64(14), np.int64(15), np.int64(16), np.int64(17)]
+  Pattern: Hours 0-1 = overnight workplace charging (Caltech behavior)
+  Pattern: Hours 14-17 = afternoon departure charging
+  Peak hours account for 25.0% of timesteps but 55.7% of sessions
 
-Revenue Metrics:
+ACN Session Metrics:
+  Total sessions: 14999
+  Avg sessions per hour: 89.3
+  Avg kWh per session: 9.14 kWh
+
+ACN Revenue Metrics (Baseline ₹15/kWh):
   Total baseline revenue: ₹2025420
   Average revenue per hour: ₹12056.07
   Average revenue per session: ₹137.05
 
-Temporal Patterns:
-  Peak hour utilization: 26.8%
-  Off-peak utilization: 28.5%
-  Weekday avg sessions: 101.7
-  Weekend avg sessions: 58.2
+======================================================================
+SECTION B: URBANEV INSIGHTS (Shenzhen Urban Charging)
+======================================================================
+
+UrbanEV Utilization Statistics:
+  Mean: 89.3%
+  Std: 7.1%
+  Range: [74.3%, 100.0%]
+  Regime distribution: Discount=0, Neutral=23, Surge=145
+
+UrbanEV Temporal Patterns:
+  Peak hour utilization: 86.7%
+  Off-peak utilization: 90.1%
+  Weekday avg utilization: 89.3%
+  Weekend avg utilization: 89.1%
+
+======================================================================
+SECTION C: CROSS-DATASET COMPARISON & PRICING IMPLICATIONS
+======================================================================
+
+Temporal Pattern Differences:
+  ACN peaks (US workplace): [np.int64(0), np.int64(1), np.int64(14), np.int64(15), np.int64(16), np.int64(17)]
+  UrbanEV peaks differ based on urban behavior (commute/shopping)
+  Geographic context: Caltech (US) vs Shenzhen (China)
 
 Pricing Implications:
-  0 timesteps (0.0%) qualify for surge pricing
-  106 timesteps (63.1%) qualify for discount pricing
-  Neutral pricing applies to 36.9% of timesteps
+  • 145 timesteps (86.3%) qualify for surge pricing
+  • 0 timesteps (0.0%) qualify for discount pricing
+  • Neutral pricing applies to 13.7% of timesteps
+  • ACN overnight peaks suggest workplace tariff optimization
+  • UrbanEV patterns suggest commute-time surge opportunities
+  • Different datasets require different pricing strategies
