@@ -1,0 +1,27 @@
+EV CHARGING DATA - KEY INSIGHTS
+======================================================================
+
+Peak Hours: [np.int64(0), np.int64(1), np.int64(14), np.int64(15), np.int64(16), np.int64(17)]
+Peak hours account for 25.0% of timesteps but 55.7% of sessions
+
+Utilization Statistics:
+  Mean: 28.0%
+  Std: 4.0%
+  Range: [22.0%, 34.5%]
+  Regime distribution: Discount=106, Neutral=62, Surge=0
+
+Revenue Metrics:
+  Total baseline revenue: ₹2025420
+  Average revenue per hour: ₹12056.07
+  Average revenue per session: ₹137.05
+
+Temporal Patterns:
+  Peak hour utilization: 26.8%
+  Off-peak utilization: 28.5%
+  Weekday avg sessions: 101.7
+  Weekend avg sessions: 58.2
+
+Pricing Implications:
+  0 timesteps (0.0%) qualify for surge pricing
+  106 timesteps (63.1%) qualify for discount pricing
+  Neutral pricing applies to 36.9% of timesteps

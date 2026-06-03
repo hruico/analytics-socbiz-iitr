@@ -2,11 +2,72 @@
 import sys
 import logging
 from pathlib import Path
+import pandas as pd
+import json
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.preprocessing.real_data_pipeline import build_real_data_pipeline
+
+def convert_excel_to_json():
+    """Convert ACN Excel file to JSON format."""
+    excel_file = 'data/raw/acndata_sessions.json.xlsx'
+    json_file = 'data/raw/acndata_sessions.json'
+    
+    # Check if JSON already exists
+    if Path(json_file).exists():
+        print(f"✓ JSON file already exists: {json_file}")
+        return
+    
+    print(f"Converting Excel to JSON: {excel_file}")
+    
+    # Read Excel file
+    df = pd.read_excel(excel_file)
+    
+    # Filter rows with actual session data
+    df_sessions = df[df['sessionID'].notna()].copy()
+    print(f"  Found {len(df_sessions)} sessions in Excel")
+    
+    # Convert to JSON format
+    sessions_list = []
+    for _, row in df_sessions.iterrows():
+        # Parse timestamps
+        conn_time = row['connectionTime'] if pd.notna(row['connectionTime']) else None
+        disconn_time = row['disconnectTime'] if pd.notna(row['disconnectTime']) else None
+        
+        # Convert to ISO format if they're strings
+        if isinstance(conn_time, str):
+            try:
+                conn_time = pd.to_datetime(conn_time, utc=True).isoformat()
+            except:
+                conn_time = None
+        elif hasattr(conn_time, 'isoformat'):
+            conn_time = conn_time.isoformat()
+        
+        if isinstance(disconn_time, str):
+            try:
+                disconn_time = pd.to_datetime(disconn_time, utc=True).isoformat()
+            except:
+                disconn_time = None
+        elif hasattr(disconn_time, 'isoformat'):
+            disconn_time = disconn_time.isoformat()
+        
+        session = {
+            'sessionID': str(row['sessionID']) if pd.notna(row['sessionID']) else None,
+            'stationID': str(row['stationID']) if pd.notna(row['stationID']) else 'unknown',
+            'connectionTime': conn_time,
+            'disconnectTime': disconn_time,
+            'kWhDelivered': float(row['kWhDelivered']) if pd.notna(row['kWhDelivered']) else 0.0,
+        }
+        sessions_list.append(session)
+    
+    # Save as JSON
+    with open(json_file, 'w') as f:
+        json.dump(sessions_list, f, indent=2)
+    
+    print(f"✓ Converted {len(sessions_list)} sessions to JSON")
+    print(f"✓ Saved to: {json_file}\n")
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -26,6 +87,10 @@ if __name__ == "__main__":
     print("✓ FIX 6: Soft confidence weighting + reward decomposition")
     print("\n" + "=" * 60 + "\n")
     
+    # Convert Excel to JSON first
+    convert_excel_to_json()
+    
+    # Build unified analytical base
     unified = build_real_data_pipeline()
     
     print("\n" + "=" * 60)
