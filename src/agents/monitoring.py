@@ -92,20 +92,30 @@ OUTCOME:
 - Step: {step}
 
 PARAMETERS:
-- ε={epsilon:.3f} [range: 0.1-5.0]
-- α={alpha:.3f} [range: 1.0-10.0]
-- β={beta:.3f} [range: 1.0-10.0]
+- ε={epsilon:.3f} [demand elasticity, range: 0.1-5.0]
+- α={alpha:.3f} [surge multiplier, range: 1.0-10.0]
+- β={beta:.3f} [discount multiplier, range: 1.0-10.0]
 
 HISTORY:
 {history_summary}
 
-GUIDELINES:
-- If revenue declining 3+ steps IN NEUTRAL REGIME: reduce ε (negative delta)
-- If high util persists (>80%) in surge: increase α (positive delta)
-- If low util persists (<30%) in discount: increase β (positive delta)
-- Otherwise: keep stable (zeros)
+PARAMETER-SPECIFIC GUIDELINES (FIX 6: Reward Decomposition):
+- ε (elasticity): Adjust based on NEUTRAL regime revenue trends
+  * If revenue declining 3+ steps in neutral: reduce ε (negative delta)
+  * If revenue improving in neutral: small increase ε (positive delta)
+  
+- α (surge multiplier): Adjust based on SURGE regime congestion signals
+  * If high util persists (>80%) in surge: increase α to extract more premium
+  * If utilization drops in surge: decrease α to avoid over-pricing
+  
+- β (discount multiplier): Adjust based on DISCOUNT regime off-peak uplift
+  * If low util persists (<30%) in discount: increase β for deeper discounts
+  * If utilization rises in discount: decrease β to preserve margins
 
-IMPORTANT: Epsilon adjustments only make sense in neutral regime. Surge/discount have different dynamics.
+IMPORTANT: Each parameter responds to different reward components:
+- ε → Revenue delta in neutral regime
+- α → Congestion penalty in surge regime  
+- β → Off-peak uplift in discount regime
 
 CONSTRAINTS: |Δε|≤0.05, |Δα|≤0.10, |Δβ|≤0.10
 

@@ -8,12 +8,14 @@ def load_dataset(path: str) -> pd.DataFrame:
     """
     Load unified analytical base CSV.
     
-    Minimal implementation - assumes preprocessed data exists.
+    FIX 4: is_peak_hour now computed from data in preprocessing, not hardcoded here.
     """
     df = pd.read_csv(path)
     
-    # Engineer basic features
-    df['is_peak_hour'] = df['hour_of_day'].isin([7, 8, 9, 17, 18, 19]).astype(int)
+    # is_peak_hour should already exist from real_data_pipeline
+    if 'is_peak_hour' not in df.columns:
+        # Fallback only if missing (shouldn't happen with new pipeline)
+        df['is_peak_hour'] = 0
     
     # Engineer revenue_per_kwh
     df['revenue_per_kwh'] = np.where(
@@ -23,8 +25,10 @@ def load_dataset(path: str) -> pd.DataFrame:
     )
     
     # Handle missing values
-    df['urban_mean_utilization'] = df['urban_mean_utilization'].fillna(method='ffill')
-    df['urban_peak_queue'] = df['urban_peak_queue'].fillna(method='ffill')
+    if 'urban_mean_utilization' in df.columns:
+        df['urban_mean_utilization'] = df['urban_mean_utilization'].fillna(method='ffill')
+    if 'urban_peak_queue' in df.columns:
+        df['urban_peak_queue'] = df['urban_peak_queue'].fillna(method='ffill')
     
     # Sort by time_step
     df = df.sort_values('time_step').reset_index(drop=True)

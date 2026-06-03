@@ -115,21 +115,34 @@ RESPOND WITH JSON ONLY:
             
             logger.info(f"LLM regime suggestion: {regime} at u_pred={u_pred:.1%}")
             
-            # HARD BOUNDARY ENFORCEMENT - thresholds are system rules, not LLM judgment calls
-            # LLM decision is advisory; mathematical thresholds are law
-            if u_pred > 0.80:
-                if regime != "surge":
-                    logger.warning(f"Overriding LLM {regime} → surge (u_pred={u_pred:.1%} > 80%)")
-                regime = "surge"
-            elif u_pred < 0.30:
-                if regime != "discount":
-                    logger.warning(f"Overriding LLM {regime} → discount (u_pred={u_pred:.1%} < 30%)")
-                regime = "discount"
-            else:
-                if regime not in ["neutral"]:
-                    logger.warning(f"Overriding LLM {regime} → neutral (30% ≤ u_pred={u_pred:.1%} ≤ 80%)")
-                regime = "neutral"
+            # FIX 6: SOFT CONFIDENCE WEIGHTING instead of hard override
+            # Problem: Hard boundaries swallow genuine signals near thresholds
+            # Solution: Blend LLM + rule-based proportionally to confidence
             
+            # Determine rule-based regime
+            if u_pred > 0.80:
+                rule_regime = "surge"
+                threshold = 0.80
+            elif u_pred < 0.30:
+                rule_regime = "discount"
+                threshold = 0.30
+            else:
+                rule_regime = "neutral"
+                threshold = 0.55  # midpoint for neutral band
+            
+            # Compute confidence: how far from threshold?
+            confidence = abs(u_pred - threshold) / max(threshold, 1 - threshold)
+            
+            # Blend: use LLM if high confidence, rule if near boundary
+            if confidence > 0.15:  # Far from threshold - trust LLM
+                final_regime = regime
+                logger.info(f"High confidence ({confidence:.2f}) - using LLM regime: {regime}")
+            else:  # Near threshold - use rule
+                final_regime = rule_regime
+                if regime != rule_regime:
+                    logger.info(f"Low confidence ({confidence:.2f}) - overriding LLM {regime} → {rule_regime}")
+            
+            regime = final_regime
             logger.info(f"Final regime: {regime} (u_pred={u_pred:.1%})")
             
             # FIX 2: Compute price deterministically from regime
