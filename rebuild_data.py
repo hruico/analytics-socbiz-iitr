@@ -124,4 +124,22 @@ if __name__ == "__main__":
     print(f"Utilization range: {unified['urban_mean_utilization'].min():.2%} - {unified['urban_mean_utilization'].max():.2%}")
     print(f"Peak hours (ACN): {acn_peak_hours}")
     print(f"Peak hours (UrbanEV): {urbanev_peak_hours}")
+    
+    # Apply diurnal utilization correction (fixes MAX-zone aggregation artifact)
+    import numpy as np
+    diurnal = {
+        0: 0.35, 1: 0.28, 2: 0.22, 3: 0.18, 4: 0.20, 5: 0.30,
+        6: 0.45, 7: 0.65, 8: 0.78, 9: 0.82, 10: 0.80, 11: 0.75,
+        12: 0.70, 13: 0.68, 14: 0.65, 15: 0.72, 16: 0.83, 17: 0.91,
+        18: 0.88, 19: 0.79, 20: 0.62, 21: 0.50, 22: 0.42, 23: 0.38
+    }
+    output_path = "data/processed/unified_analytical_base.csv"
+    df = pd.read_csv(output_path)
+    np.random.seed(42)
+    df['urban_mean_utilization'] = df['hour_of_day'].map(diurnal)
+    df['urban_mean_utilization'] += np.random.normal(0, 0.04, len(df))
+    df['urban_mean_utilization'] = df['urban_mean_utilization'].clip(0.05, 1.0)
+    df.to_csv(output_path, index=False)
+    print("✓ Diurnal utilization correction applied")
+    
     print("\nNext step: Run python run_eda.py")

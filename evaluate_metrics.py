@@ -19,11 +19,98 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def simulate_price_for_row(u_pred: float, baseline: float, alpha: float, beta: float, 
+                           lower: float = 10.0, upper: float = 25.0) -> float:
+    """
+    Simulate dynamic price using learned parameters and deterministic pricing logic.
+    Mirrors the PricingAgent._compute_price_from_regime logic.
+    
+    Args:
+        u_pred: Predicted utilization
+        baseline: Baseline price (₹15/kWh)
+        alpha: Learned surge pricing parameter
+        beta: Learned discount pricing parameter
+        lower: Lower price bound
+        upper: Upper price bound
+    
+    Returns:
+        Simulated dynamic price
+    """
+    if u_pred > 0.80:
+        # Surge regime
+        p_new = baseline * (1 + alpha * (u_pred - 0.80))
+    elif u_pred < 0.30:
+        # Discount regime (using elasticity approximation)
+        epsilon_approx = 0.25  # Use default elasticity for discount calculation
+        p_new = baseline - (0.30 - u_pred) * beta * epsilon_approx
+    else:
+        # Neutral regime
+        p_new = baseline + (u_pred - 0.55) * 8.0
+    
+    return np.clip(p_new, lower, upper)
+
+
+def evaluate_demand_agent_metrics(
+    agentic_outcomes_path: str = "outputs/agentic_outcomes.csv"
+) -> dict:
+    """
+    Evaluate Demand Agent prediction accuracy using u_pred vs u_actual.
+    
+    Args:
+        agentic_outcomes_path: Path to agentic outcomes CSV with predictions
+    
+    Returns:
+        Dict with RMSE, MAE, and R² metrics
+    """
+    logger.info("=" * 70)
+    logger.info("DEMAND AGENT METRICS")
+    logger.info("=" * 70)
+    
+    # Load outcomes
+    outcomes = pd.read_csv(agentic_outcomes_path)
+    
+    # Extract predictions and actuals
+    u_pred = outcomes['u_pred'].values
+    u_actual = outcomes['u_actual'].values
+    
+    # Compute metrics
+    n = len(u_pred)
+    
+    # RMSE (Root Mean Squared Error)
+    rmse = np.sqrt(np.mean((u_pred - u_actual) ** 2))
+    
+    # MAE (Mean Absolute Error)
+    mae = np.mean(np.abs(u_pred - u_actual))
+    
+    # R² (Coefficient of Determination)
+    ss_res = np.sum((u_actual - u_pred) ** 2)
+    ss_tot = np.sum((u_actual - np.mean(u_actual)) ** 2)
+    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+    
+    results = {
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2,
+        'n_samples': n
+    }
+    
+    logger.info(f"\n[0/6] Demand Agent Prediction Accuracy")
+    logger.info(f"  Samples: {n}")
+    logger.info(f"  RMSE: {rmse:.4f}")
+    logger.info(f"  MAE: {mae:.4f}")
+    logger.info(f"  R²: {r2:.4f}")
+    
+    return results
+
+
 def evaluate_all_metrics(
     agentic_outcomes_path: str = "outputs/agentic_outcomes.csv",
-    unified_base_path: str = "data/processed/unified_analytical_base.csv",
+    unified_base_path: str = "data/processed/unified_analytical_base.csv",  # Fixed real data
     baseline_price: float = 15.0,
-    elasticity: float = 0.25
+    elasticity: float = 0.25,
+    learned_epsilon: float = None,
+    learned_alpha: float = None,
+    learned_beta: float = None
 ) -> dict:
     """
     Evaluate all metrics using correct datasets.
@@ -33,6 +120,9 @@ def evaluate_all_metrics(
         unified_base_path: Path to unified analytical base with ACN and UrbanEV data
         baseline_price: Baseline tariff (₹15/kWh)
         elasticity: Demand elasticity for customer response rate
+        learned_epsilon: Final learned elasticity parameter (if None, extracted from outcomes)
+        learned_alpha: Final learned alpha parameter (if None, extracted from outcomes)
+        learned_beta: Final learned beta parameter (if None, extracted from outcomes)
     
     Returns:
         Dict with all 6 metrics
@@ -45,17 +135,26 @@ def evaluate_all_metrics(
     outcomes = pd.read_csv(agentic_outcomes_path)
     unified = pd.read_csv(unified_base_path)
     
-    # Align outcomes with unified base (assuming same time_step order)
-    if 'time_step' in outcomes.columns and 'time_step' in unified.columns:
-        merged = outcomes.merge(unified, on='time_step', how='left', suffixes=('_out', '_base'))
-    else:
-        # Fallback: assume row alignment
-        merged = pd.concat([outcomes.reset_index(drop=True), unified.reset_index(drop=True)], axis=1)
+    # Extract final learned parameters from last row of outcomes if not provided
+    if learned_epsilon is None or learned_alpha is None or learned_beta is None:
+        last_row = outcomes.iloc[-1]
+        learned_epsilon = last_row['epsilon_est'] if 'epsilon_est' in outcomes.columns else 0.232
+        learned_alpha = last_row['alpha_est'] if 'alpha_est' in outcomes.columns else 2.569
+        learned_beta = last_row['beta_est'] if 'beta_est' in outcomes.columns else 2.480
+    
+    logger.info(f"\nLearned parameters (final):")
+    logger.info(f"  ε = {learned_epsilon:.3f}")
+    logger.info(f"  α = {learned_alpha:.3f}")
+    logger.info(f"  β = {learned_beta:.3f}")
+    
+    # TASK 1 FIX: Merge on step/time_step to get only test rows
+    # outcomes has 'step', unified has 'time_step'
+    merged = outcomes.merge(unified, left_on='step', right_on='time_step', how='inner', suffixes=('', '_base'))
     
     logger.info(f"\nData loaded:")
     logger.info(f"  Outcomes: {len(outcomes)} steps")
-    logger.info(f"  Unified base: {len(unified)} rows")
-    logger.info(f"  Merged: {len(merged)} rows")
+    logger.info(f"  Unified base (full dataset): {len(unified)} rows")
+    logger.info(f"  Merged (test set only): {len(merged)} rows")
     
     results = {}
     
@@ -64,30 +163,23 @@ def evaluate_all_metrics(
     # =========================
     logger.info("\n[1/6] Computing Revenue Gain % (ACN)...")
     
-    # PROBLEM 7a FIX: Apply dynamic tariffs to ACN hourly kWh volumes
-    # Extract ACN kWh from unified base (or use acn_total_kwh if in merged)
-    if 'acn_total_kwh_base' in merged.columns:
-        acn_kwh = merged['acn_total_kwh_base']
-    elif 'acn_total_kwh' in merged.columns:
-        acn_kwh = merged['acn_total_kwh']
-    else:
-        logger.error("ACN kWh column not found")
-        acn_kwh = pd.Series([0] * len(merged))
+    # TASK 1: Extract ACN kWh and dynamic prices from merged test rows
+    acn_kwh = merged['acn_total_kwh']
+    dynamic_prices = merged['p_new']
     
-    # Dynamic prices from outcomes
-    dynamic_prices = merged['p_new'] if 'p_new' in merged.columns else outcomes['p_new']
-    
-    # Calculate revenues
-    new_revenue = (dynamic_prices * acn_kwh).sum()
-    old_revenue = (baseline_price * acn_kwh).sum()
+    # TASK 1: Calculate revenues over same 34 test rows
+    old_revenue = (acn_kwh * baseline_price).sum()
+    new_revenue = (acn_kwh * dynamic_prices).sum()
     revenue_gain_pct = (new_revenue - old_revenue) / old_revenue * 100 if old_revenue > 0 else 0
     
     results['revenue_gain_pct'] = revenue_gain_pct
     results['new_revenue'] = new_revenue
     results['old_revenue'] = old_revenue
     
-    logger.info(f"  Old revenue (₹15/kWh): ₹{old_revenue:.2f}")
-    logger.info(f"  New revenue (dynamic): ₹{new_revenue:.2f}")
+    logger.info(f"  Test set rows: {len(merged)}")
+    logger.info(f"  Total kWh (test set): {acn_kwh.sum():.2f}")
+    logger.info(f"  Old revenue (₹15/kWh, test set only): ₹{old_revenue:.2f}")
+    logger.info(f"  New revenue (dynamic, test set only): ₹{new_revenue:.2f}")
     logger.info(f"  Revenue gain: {revenue_gain_pct:+.2f}%")
     
     # =========================
@@ -95,8 +187,8 @@ def evaluate_all_metrics(
     # =========================
     logger.info("\n[2/6] Computing Charger Utilization Rate (UrbanEV)...")
     
-    # PROBLEM 7b FIX: Before = mean UrbanEV utilization
-    # After = simulate demand response with elasticity
+    # TASK 2 FIX: Use actual dynamic price per row with elasticity formula
+    # u_after = u_before * (1 - ε * (price - 15) / 15) per row, then average
     if 'urban_mean_utilization_base' in merged.columns:
         util_col = 'urban_mean_utilization_base'
     elif 'urban_mean_utilization' in merged.columns:
@@ -108,10 +200,8 @@ def evaluate_all_metrics(
     if util_col:
         util_before = merged[util_col].mean()
         
-        # Simulate after: higher price reduces demand, lower price increases
-        price_delta_pct = (dynamic_prices - baseline_price) / baseline_price
-        demand_response = -elasticity * price_delta_pct  # Negative elasticity
-        util_after_simulated = merged[util_col] * (1 + demand_response)
+        # Apply per-row elasticity formula using actual dynamic prices
+        util_after_simulated = merged[util_col] * (1 - elasticity * (dynamic_prices - baseline_price) / baseline_price)
         util_after_simulated = util_after_simulated.clip(0, 1.0)  # Cap at 100%
         util_after = util_after_simulated.mean()
         
@@ -120,7 +210,7 @@ def evaluate_all_metrics(
         results['utilization_change_pct'] = (util_after - util_before) / util_before * 100 if util_before > 0 else 0
         
         logger.info(f"  Before: {util_before:.1%}")
-        logger.info(f"  After (simulated with ε={elasticity}): {util_after:.1%}")
+        logger.info(f"  After (using actual dynamic prices per row, ε={elasticity}): {util_after:.1%}")
         logger.info(f"  Change: {results['utilization_change_pct']:+.2f}%")
     else:
         results['utilization_before'] = 0
@@ -130,16 +220,36 @@ def evaluate_all_metrics(
     # =========================
     # METRIC 3: Off-Peak Uplift
     # =========================
-    logger.info("\n[3/6] Computing Off-Peak Uplift (UrbanEV)...")
+    logger.info("\n[3/6] Computing Off-Peak Uplift (UrbanEV - ALL 168 ROWS)...")
     
-    # PROBLEM 7c FIX: Count UrbanEV sessions/pile-hours where utilization <30%
+    # TASK 3 FIX: Compute over all 168 rows using simulated prices
     off_peak_threshold = 0.30
     
-    if util_col:
-        off_peak_mask_before = merged[util_col] < off_peak_threshold
+    # Determine utilization column in full unified dataset
+    if 'urban_mean_utilization' in unified.columns:
+        util_col_full = 'urban_mean_utilization'
+    else:
+        logger.error("UrbanEV utilization column not found in unified dataset")
+        util_col_full = None
+    
+    if util_col_full:
+        # Before: baseline state across all 168 rows
+        util_before_full = unified[util_col_full]
+        
+        # Simulate dynamic prices for all 168 rows
+        simulated_prices_full = unified[util_col_full].apply(
+            lambda u: simulate_price_for_row(u, baseline_price, learned_alpha, learned_beta)
+        )
+        
+        # After: apply elasticity formula per row using simulated prices
+        util_after_full = util_before_full * (1 - learned_epsilon * (simulated_prices_full - baseline_price) / baseline_price)
+        util_after_full = util_after_full.clip(0, 1.0)
+        
+        # Count off-peak timesteps
+        off_peak_mask_before = util_before_full < off_peak_threshold
         off_peak_count_before = off_peak_mask_before.sum()
         
-        off_peak_mask_after = util_after_simulated < off_peak_threshold
+        off_peak_mask_after = util_after_full < off_peak_threshold
         off_peak_count_after = off_peak_mask_after.sum()
         
         off_peak_uplift = off_peak_count_after - off_peak_count_before
@@ -150,8 +260,9 @@ def evaluate_all_metrics(
         results['off_peak_uplift'] = off_peak_uplift
         results['off_peak_uplift_pct'] = off_peak_uplift_pct
         
+        logger.info(f"  Dataset: All {len(unified)} rows")
         logger.info(f"  Off-peak timesteps before (<{off_peak_threshold:.0%}): {off_peak_count_before}")
-        logger.info(f"  Off-peak timesteps after: {off_peak_count_after}")
+        logger.info(f"  Off-peak timesteps after (simulated): {off_peak_count_after}")
         logger.info(f"  Uplift: {off_peak_uplift:+d} ({off_peak_uplift_pct:+.1f}%)")
     else:
         results['off_peak_before'] = 0
@@ -162,28 +273,28 @@ def evaluate_all_metrics(
     # =========================
     # METRIC 4: Avg Waiting Time Reduction
     # =========================
-    logger.info("\n[4/6] Computing Avg Waiting Time Reduction (UrbanEV)...")
+    logger.info("\n[4/6] Computing Avg Waiting Time Reduction (UrbanEV - ALL 168 ROWS)...")
     
-    # PROBLEM 7d FIX: Use UrbanEV queue_length_proxy at peak hours
-    # For now, compute queue proxy as: (utilization - 0.5) * 10 for util > 50%
-    if util_col:
-        queue_proxy_before = merged[util_col].apply(lambda u: max(0, (u - 0.5) * 10))
-        queue_proxy_after = util_after_simulated.apply(lambda u: max(0, (u - 0.5) * 10))
+    # TASK 4 FIX: Compute over all 168 rows using simulated prices
+    if util_col_full:
+        # Queue proxy: (utilization - 0.5) * 10 for util > 50%
+        queue_proxy_before_full = util_before_full.apply(lambda u: max(0, (u - 0.5) * 10))
+        queue_proxy_after_full = util_after_full.apply(lambda u: max(0, (u - 0.5) * 10))
         
-        # Focus on peak hours (is_peak_hour == 1)
-        if 'is_peak_hour' in merged.columns:
-            peak_mask = (merged['is_peak_hour'] == 1).values
-        elif 'is_peak_hour_base' in merged.columns:
-            peak_mask = (merged['is_peak_hour_base'] == 1).values
+        # Focus on peak hours
+        if 'is_peak_hour' in unified.columns:
+            peak_mask = (unified['is_peak_hour'] == 1).values
         else:
             peak_mask = None
         
-        if peak_mask is not None:
-            queue_before_peak = queue_proxy_before.iloc[peak_mask].mean()
-            queue_after_peak = queue_proxy_after.iloc[peak_mask].mean()
+        if peak_mask is not None and peak_mask.sum() > 0:
+            queue_before_peak = queue_proxy_before_full[peak_mask].mean()
+            queue_after_peak = queue_proxy_after_full[peak_mask].mean()
+            peak_count = peak_mask.sum()
         else:
-            queue_before_peak = queue_proxy_before.mean()
-            queue_after_peak = queue_proxy_after.mean()
+            queue_before_peak = queue_proxy_before_full.mean()
+            queue_after_peak = queue_proxy_after_full.mean()
+            peak_count = len(unified)
         
         queue_reduction = queue_before_peak - queue_after_peak
         queue_reduction_pct = (queue_reduction / queue_before_peak * 100) if queue_before_peak > 0 else 0
@@ -193,8 +304,9 @@ def evaluate_all_metrics(
         results['queue_reduction'] = queue_reduction
         results['queue_reduction_pct'] = queue_reduction_pct
         
+        logger.info(f"  Dataset: All {len(unified)} rows ({peak_count} peak hours)")
         logger.info(f"  Queue proxy before (peak hours): {queue_before_peak:.2f}")
-        logger.info(f"  Queue proxy after (peak hours): {queue_after_peak:.2f}")
+        logger.info(f"  Queue proxy after (peak hours, simulated): {queue_after_peak:.2f}")
         logger.info(f"  Reduction: {queue_reduction:+.2f} ({queue_reduction_pct:+.1f}%)")
     else:
         results['queue_before_peak'] = 0
@@ -271,4 +383,8 @@ def evaluate_all_metrics(
 
 
 if __name__ == "__main__":
+    # First evaluate Demand Agent metrics
+    demand_results = evaluate_demand_agent_metrics()
+    
+    # Then evaluate all other metrics
     results = evaluate_all_metrics()

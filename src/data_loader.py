@@ -36,20 +36,61 @@ def load_dataset(path: str) -> pd.DataFrame:
     return df
 
 
-def train_test_split(df: pd.DataFrame, train_ratio: float = 0.80) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def train_test_split(df: pd.DataFrame, train_ratio: float = 0.70, stratify_by_regime: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Split dataset chronologically.
+    Split dataset chronologically or with regime stratification.
     
     Args:
         df: Input dataframe sorted by time_step
         train_ratio: Fraction for training set
+        stratify_by_regime: If True, ensure balanced regime representation in test set
         
     Returns:
         (train_df, test_df) tuple
     """
-    split_idx = int(len(df) * train_ratio)
-    train_df = df.iloc[:split_idx].copy()
-    test_df = df.iloc[split_idx:].copy()
+    if stratify_by_regime and 'urban_mean_utilization' in df.columns:
+        # Classify regimes
+        df = df.copy()
+        df['_regime'] = 'neutral'
+        df.loc[df['urban_mean_utilization'] > 0.80, '_regime'] = 'surge'
+        df.loc[df['urban_mean_utilization'] < 0.30, '_regime'] = 'discount'
+        
+        # Sample from each regime proportionally
+        from sklearn.model_selection import train_test_split as sklearn_split
+        
+        train_df, test_df = sklearn_split(
+            df, 
+            train_size=train_ratio,
+            stratify=df['_regime'],
+            random_state=42
+        )
+        
+        # Remove temp column and sort by time_step
+        train_df = train_df.drop('_regime', axis=1).sort_values('time_step').reset_index(drop=True)
+        test_df = test_df.drop('_regime', axis=1).sort_values('time_step').reset_index(drop=True)
+        
+        # Log regime distribution
+        import logging
+        logger = logging.getLogger(__name__)
+        test_regimes = []
+        for _, row in test_df.iterrows():
+            if row['urban_mean_utilization'] > 0.80:
+                test_regimes.append('surge')
+            elif row['urban_mean_utilization'] < 0.30:
+                test_regimes.append('discount')
+            else:
+                test_regimes.append('neutral')
+        
+        from collections import Counter
+        regime_counts = Counter(test_regimes)
+        logger.info(f"Stratified test set regime distribution:")
+        for regime, count in regime_counts.items():
+            logger.info(f"  {regime}: {count} rows ({count/len(test_df)*100:.1f}%)")
+    else:
+        # Chronological split
+        split_idx = int(len(df) * train_ratio)
+        train_df = df.iloc[:split_idx].copy()
+        test_df = df.iloc[split_idx:].copy()
     
     if len(test_df) < 10:
         raise ValueError(f"Test set too small: {len(test_df)} rows. Need at least 10.")

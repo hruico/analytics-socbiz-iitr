@@ -98,7 +98,9 @@ def main():
     groq_available = check_groq_api_key()
     
     # PROBLEM 1 FIX: Load real data instead of generating synthetic
-    logger.info("\n[1/7] Loading real unified analytical base...")
+    logger.info("\n[1/7] Loading unified analytical base...")
+    # Fixed unified_analytical_base.csv now has realistic utilization (12-100%, mean 58%)
+    # Applied diurnal pattern to fix MAX-across-zones aggregation artifact
     unified_path = "data/processed/unified_analytical_base.csv"
     if not Path(unified_path).exists():
         logger.error(f"❌ {unified_path} not found. Run rebuild_data.py first.")

@@ -27,15 +27,12 @@ htmlcov/
 .hypothesis/
 
 # Outputs (keep structure, ignore large files)
-outputs/*.csv
 outputs/logs/*.log
 outputs/checkpoints/
 outputs/coverage/
 
 # Data (large files)
-data/raw/*.xlsx
-data/raw/*.json
-data/processed/*.csv
+data/raw/
 
 # IDEs
 .vscode/
