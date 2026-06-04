@@ -225,6 +225,9 @@ python run_agentic.py
 
 # Step 4: Compute final evaluation metrics
 python evaluate_metrics.py
+
+# Step 5: Generate presentation plots
+python generate_plots.py
 ```
 
 ### Expected Runtime
@@ -232,8 +235,9 @@ python evaluate_metrics.py
 - `run_eda.py`: ~8 seconds
 - `run_agentic.py`: ~25 seconds (34 steps × 66 LLM calls)
 - `evaluate_metrics.py`: ~2 seconds
+- `generate_plots.py`: ~3 seconds
 
-**Total**: ~40 seconds end-to-end
+**Total**: ~45 seconds end-to-end
 
 ---
 

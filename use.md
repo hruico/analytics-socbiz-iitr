@@ -6,6 +6,8 @@
 # 1. Activate virtual environment
 source .venv/bin/activate
 
+export GROQ_API_KEY='your-api-key'
+
 # 2. Rebuild data with peak-zone utilization
 python rebuild_data.py
 
@@ -17,6 +19,8 @@ python test_fixes.py
 
 # 5. Run optimization
 python run_agentic.py
+
+python generate_plots.py
 
 # 6. Evaluate metrics
 python evaluate_metrics.py
