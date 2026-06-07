@@ -115,7 +115,8 @@ Outputs land in `outputs/` — CSV results, EDA summaries, and figures.
 
 ```
 ├── data/
-│   └── raw/                    # Raw ACN + UrbanEV datasets (not tracked in git)
+│   ├── raw/                    # Raw ACN + UrbanEV datasets (not tracked in git)
+│   └── processsed/
 ├── outputs/
 │   ├── agentic_outcomes.csv    # Step-by-step optimization results
 │   ├── evaluation_metrics.csv  # Final 6 evaluation metrics
