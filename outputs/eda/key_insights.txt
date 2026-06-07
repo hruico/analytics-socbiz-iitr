@@ -25,16 +25,16 @@ SECTION B: URBANEV INSIGHTS (Shenzhen Urban Charging)
 ======================================================================
 
 UrbanEV Utilization Statistics:
-  Mean: 89.3%
-  Std: 7.1%
-  Range: [74.3%, 100.0%]
-  Regime distribution: Discount=0, Neutral=23, Surge=145
+  Mean: 41.9%
+  Std: 6.0%
+  Range: [33.2%, 52.2%]
+  Regime distribution: Discount=0, Neutral=168, Surge=0
 
 UrbanEV Temporal Patterns:
-  Peak hour utilization: 86.7%
-  Off-peak utilization: 90.1%
-  Weekday avg utilization: 89.3%
-  Weekend avg utilization: 89.1%
+  Peak hour utilization: 40.2%
+  Off-peak utilization: 42.4%
+  Weekday avg utilization: 41.8%
+  Weekend avg utilization: 42.1%
 
 ======================================================================
 SECTION C: CROSS-DATASET COMPARISON & PRICING IMPLICATIONS
@@ -46,9 +46,9 @@ Temporal Pattern Differences:
   Geographic context: Caltech (US) vs Shenzhen (China)
 
 Pricing Implications:
-  • 145 timesteps (86.3%) qualify for surge pricing
+  • 0 timesteps (0.0%) qualify for surge pricing
   • 0 timesteps (0.0%) qualify for discount pricing
-  • Neutral pricing applies to 13.7% of timesteps
+  • Neutral pricing applies to 100.0% of timesteps
   • ACN overnight peaks suggest workplace tariff optimization
   • UrbanEV patterns suggest commute-time surge opportunities
   • Different datasets require different pricing strategies

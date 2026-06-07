@@ -1,4 +1,4 @@
-"""System configuration with validation."""
+"""System configuration."""
 from typing import Literal, Tuple
 from pydantic import BaseModel, Field, field_validator
 import json
@@ -6,50 +6,42 @@ import json
 
 class SystemConfig(BaseModel):
     """Configuration for the EV Tariff Optimization System."""
-    
-    # LLM Provider
-    llm_provider: Literal["openai", "anthropic", "ollama", "groq"] = "ollama"
-    llm_model: str = "llama3.2:3b"
-    
-    # Geography-Aware Pricing
+
+    # LLM
+    llm_provider: Literal["openai", "anthropic", "ollama", "groq"] = "groq"
+    llm_model: str = "llama-3.3-70b-versatile"
+
+    # Pricing — thresholds calibrated to P25/P75 of UrbanEV utilization distribution
     baseline_tariff_per_kwh: float = Field(default=15.0, gt=0.0)
     pricing_bounds: Tuple[float, float] = Field(default=(10.0, 22.0))
-    
-    # Initial Parameters [epsilon, alpha, beta]
-    theta_init: Tuple[float, float, float] = (0.25, 2.5, 2.5)
-    
-    # Convergence Criteria
+    surge_threshold: float = Field(default=0.48, gt=0.0)
+    discount_threshold: float = Field(default=0.36, gt=0.0)
+
+    # Theta = [epsilon, alpha, beta]
+    theta_init: Tuple[float, float, float] = (0.25, 4.0, 4.0)
+
+    # Convergence
     revenue_variance_threshold: float = 1.0
     parameter_delta_threshold: float = 0.01
     utilization_std_threshold: float = 0.15
     max_utilization_threshold: float = 0.80
     queue_reduction_target: float = 0.20
-    convergence_window: int = 50
+    convergence_window: int = 40
     max_iterations: int = 1000
-    
-    # Learning Rate Schedule
+
+    # Learning rate schedule: lr = lr_init / (1 + decay * step)
     learning_rate_init: float = 0.1
     learning_rate_decay: float = 0.001
-    
-    # Reward Weights [w1, w2, w3] - PROBLEM 5 FIX: Normalized to sum to 1.0
-    # w1: revenue gain component weight
-    # w2: utilization improvement weight  
-    # w3: congestion penalty weight
-    reward_weights: Tuple[float, float, float] = (0.33, 0.33, 0.34)  # Sum = 1.0
-    
-    # Reproducibility
+
+    # Reward weights [revenue, utilization, congestion] — sum to 1.0
+    reward_weights: Tuple[float, float, float] = (0.33, 0.33, 0.34)
+
+    # Misc
     random_seed: int = 42
-    train_ratio: float = 0.80
-    
-    # Agent Retry Policy
+    train_ratio: float = 0.60
     max_agent_retries: int = 3
     retry_backoff_seconds: float = 2.0
-    
-    # LLM Cost Controls
-    llm_cost_budget_usd: float = 10.0
-    max_llm_calls_per_step: int = 5
-    llm_token_budget: int = 100000
-    
+
     @field_validator("pricing_bounds")
     @classmethod
     def validate_pricing_bounds(cls, v: Tuple[float, float]) -> Tuple[float, float]:
@@ -60,7 +52,7 @@ class SystemConfig(BaseModel):
         if v[1] <= v[0]:
             raise ValueError("pricing_bounds[1] must be greater than pricing_bounds[0]")
         return v
-    
+
     @field_validator("theta_init")
     @classmethod
     def validate_theta(cls, v: Tuple[float, float, float]) -> Tuple[float, float, float]:
@@ -72,9 +64,8 @@ class SystemConfig(BaseModel):
         if not (1.0 <= beta <= 10.0):
             raise ValueError(f"beta {beta} must be in [1.0, 10.0]")
         return v
-    
+
     def model_post_init(self, __context):
-        """Validate baseline is within bounds."""
         if not (self.pricing_bounds[0] <= self.baseline_tariff_per_kwh <= self.pricing_bounds[1]):
             raise ValueError(
                 f"baseline_tariff {self.baseline_tariff_per_kwh} must be within "
@@ -83,17 +74,12 @@ class SystemConfig(BaseModel):
 
 
 class ConfigParser:
-    """Parser for loading and saving configurations."""
-    
     @staticmethod
     def parse(path: str) -> SystemConfig:
-        """Load configuration from JSON file."""
-        with open(path, 'r') as f:
-            data = json.load(f)
-        return SystemConfig(**data)
-    
+        with open(path, "r") as f:
+            return SystemConfig(**json.load(f))
+
     @staticmethod
     def serialize(config: SystemConfig, path: str) -> None:
-        """Save configuration to JSON file."""
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(config.model_dump(), f, indent=2)

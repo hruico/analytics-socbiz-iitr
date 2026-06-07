@@ -1,4 +1,4 @@
-"""Monitoring agent with LLM reasoning and robust fallback."""
+"""Monitoring agent — evaluates pricing outcomes and proposes parameter updates via LLM."""
 from typing import List, Optional
 from pydantic import BaseModel
 import numpy as np
@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 class LearningUpdate(BaseModel):
-    """Parameter update proposal."""
     delta_epsilon: float
     delta_alpha: float
     delta_beta: float
@@ -18,7 +17,6 @@ class LearningUpdate(BaseModel):
 
 
 class StepMetrics(BaseModel):
-    """Metrics for a single optimization step."""
     step: int
     regime: str
     revenue_gain_pct: float
@@ -27,14 +25,20 @@ class StepMetrics(BaseModel):
 
 
 class MonitoringAgent:
-    """Evaluates outcomes and proposes parameter updates using LLM with fallback."""
-    
+    """
+    Evaluates each pricing step and proposes updates to theta = [epsilon, alpha, beta].
+
+    On each call the LLM receives recent history and current outcome, then suggests
+    parameter deltas with a written reflection. If the LLM is unavailable a lightweight
+    rule-based fallback applies regime-specific adjustments.
+    """
+
     def __init__(self, llm_provider=None):
         self.llm = llm_provider
         self.llm_success_count = 0
         self.fallback_count = 0
-        self.last_epsilon_reduction_step = -999  # Track last epsilon reduction for cooldown
-    
+        self.last_epsilon_reduction_step = -999
+
     def evaluate_and_propose(
         self,
         step: int,
@@ -43,209 +47,166 @@ class MonitoringAgent:
         u_pred: float,
         regime: str,
         recent_history: List[StepMetrics],
-        current_theta: np.ndarray
+        current_theta: np.ndarray,
     ) -> LearningUpdate:
-        """
-        Evaluate pricing decision and propose parameter adjustment using LLM with fallback.
-        """
+        """Try LLM parameter update; fall back to deterministic rules if unavailable."""
         reward = revenue_gain_pct
-        
-        # Try LLM reasoning first
+
         if self.llm is not None:
-            update = self._llm_parameter_update(step, revenue_gain_pct, u_actual, u_pred,
-                                               regime, recent_history, current_theta, reward)
+            update = self._llm_parameter_update(
+                step, revenue_gain_pct, u_actual, u_pred,
+                regime, recent_history, current_theta, reward
+            )
             if update is not None:
                 self.llm_success_count += 1
                 return update
-        
-        # Fallback to deterministic
+
         self.fallback_count += 1
-        return self._deterministic_fallback(step, revenue_gain_pct, u_actual, regime, 
-                                           recent_history, reward, current_theta[0])  # Pass epsilon
-    
-    def _llm_parameter_update(self, step: int, revenue_gain_pct: float, u_actual: float,
-                             u_pred: float, regime: str, recent_history: List[StepMetrics],
-                             current_theta: np.ndarray, reward: float) -> Optional[LearningUpdate]:
-        """
-        Use LLM to propose parameter updates.
-        FIX 1: Stateless - no history, fresh prompt each call.
-        """
-        
-        # Prepare history summary
+        return self._deterministic_fallback(
+            step, revenue_gain_pct, u_actual, regime,
+            recent_history, reward, current_theta[0]
+        )
+
+    def _llm_parameter_update(
+        self,
+        step: int,
+        revenue_gain_pct: float,
+        u_actual: float,
+        u_pred: float,
+        regime: str,
+        recent_history: List[StepMetrics],
+        current_theta: np.ndarray,
+        reward: float,
+    ) -> Optional[LearningUpdate]:
+        """Stateless LLM call — fresh context each step, no conversation history."""
         if len(recent_history) >= 3:
-            recent_revenue = [m.revenue_gain_pct for m in recent_history[-3:]]
-            recent_util = [m.u_actual for m in recent_history[-3:]]
-            history_summary = f"Last 3 steps: revenue=[{recent_revenue[0]:+.1f}%, {recent_revenue[1]:+.1f}%, {recent_revenue[2]:+.1f}%], utilization=[{recent_util[0]:.1%}, {recent_util[1]:.1%}, {recent_util[2]:.1%}]"
+            rr = [m.revenue_gain_pct for m in recent_history[-3:]]
+            ru = [m.u_actual for m in recent_history[-3:]]
+            history_summary = (
+                f"Last 3 steps: revenue=[{rr[0]:+.1f}%, {rr[1]:+.1f}%, {rr[2]:+.1f}%], "
+                f"utilization=[{ru[0]:.1%}, {ru[1]:.1%}, {ru[2]:.1%}]"
+            )
         else:
             history_summary = "Insufficient history (< 3 steps)"
-        
+
         epsilon, alpha, beta = current_theta
-        
-        # FIX 1: Build fresh prompt each time - NO HISTORY
-        prompt = f"""You are optimizing EV charging parameters. Evaluate the pricing outcome and propose adjustments.
+
+        prompt = f"""You are optimizing EV charging tariff parameters. Evaluate this pricing step and propose adjustments.
 
 OUTCOME:
 - Revenue gain: {revenue_gain_pct:+.2f}%
-- Actual util: {u_actual:.1%}
-- Predicted util: {u_pred:.1%}
+- Actual utilization: {u_actual:.1%}
+- Predicted utilization: {u_pred:.1%}
 - Regime: {regime}
 - Step: {step}
 
 PARAMETERS:
-- ε={epsilon:.3f} [demand elasticity, range: 0.1-5.0]
-- α={alpha:.3f} [surge multiplier, range: 1.0-10.0]
-- β={beta:.3f} [discount multiplier, range: 1.0-10.0]
+- ε={epsilon:.3f}  [demand elasticity, range: 0.1–5.0]
+- α={alpha:.3f}  [surge multiplier, range: 1.0–10.0]
+- β={beta:.3f}  [discount multiplier, range: 1.0–10.0]
 
-HISTORY:
+RECENT HISTORY:
 {history_summary}
 
-PARAMETER-SPECIFIC GUIDELINES (FIX 6: Reward Decomposition):
-- ε (elasticity): Adjust based on NEUTRAL regime revenue trends
-  * If revenue declining 3+ steps in neutral: reduce ε (negative delta)
-  * If revenue improving in neutral: small increase ε (positive delta)
-  
-- α (surge multiplier): Adjust based on SURGE regime congestion signals
-  * If high util persists (>80%) in surge: increase α to extract more premium
-  * If utilization drops in surge: decrease α to avoid over-pricing
-  
-- β (discount multiplier): Adjust based on DISCOUNT regime off-peak uplift
-  * If low util persists (<30%) in discount: increase β for deeper discounts
-  * If utilization rises in discount: decrease β to preserve margins
+ADJUSTMENT GUIDELINES:
+- ε: adjust based on neutral-regime revenue trends
+- α: adjust based on surge-regime revenue extraction
+- β: adjust based on discount-regime demand uplift
 
-IMPORTANT: Each parameter responds to different reward components:
-- ε → Revenue delta in neutral regime
-- α → Congestion penalty in surge regime  
-- β → Off-peak uplift in discount regime
-
-CONSTRAINTS: |Δε|≤0.05, |Δα|≤0.10, |Δβ|≤0.10
+CONSTRAINTS: |Δε| ≤ 0.05, |Δα| ≤ 0.10, |Δβ| ≤ 0.10
 
 Respond with JSON only:
-{{"delta_epsilon": <-0.05 to 0.05>, "delta_alpha": <-0.10 to 0.10>, "delta_beta": <-0.10 to 0.10>, "reflection": "<your_reasoning>"}}"""
-        
+{{"delta_epsilon": <float>, "delta_alpha": <float>, "delta_beta": <float>, "reflection": "<reasoning>"}}"""
+
         try:
-            # FIX 1: Invoke LLM with NO conversation history
             response = self.llm.invoke_with_retry(prompt, response_format="json")
-            
             if response is None:
                 return None
-            
-            # Extract and validate deltas with robust type handling
-            def safe_float_extract(value, default=0.0):
-                """Extract float from various response formats (float, list, string)."""
-                if value is None:
+
+            def safe_float(val, default=0.0):
+                if val is None:
                     return default
-                if isinstance(value, (int, float)):
-                    return float(value)
-                if isinstance(value, list) and len(value) > 0:
-                    return float(value[0])
-                if isinstance(value, str):
-                    return float(value)
+                if isinstance(val, (int, float)):
+                    return float(val)
+                if isinstance(val, list) and val:
+                    return float(val[0])
+                if isinstance(val, str):
+                    return float(val)
                 return default
-            
-            delta_eps = safe_float_extract(response.get("delta_epsilon"), 0.0)
-            delta_alpha = safe_float_extract(response.get("delta_alpha"), 0.0)
-            delta_beta = safe_float_extract(response.get("delta_beta"), 0.0)
-            
+
+            delta_eps   = np.clip(safe_float(response.get("delta_epsilon")), -0.05, 0.05)
+            delta_alpha = np.clip(safe_float(response.get("delta_alpha")),   -0.10, 0.10)
+            delta_beta  = np.clip(safe_float(response.get("delta_beta")),    -0.10, 0.10)
+
             logger.info(f"LLM monitoring response: Δε={delta_eps}, Δα={delta_alpha}, Δβ={delta_beta}")
-            
-            # Enforce magnitude constraints
-            delta_eps = np.clip(delta_eps, -0.05, 0.05)
-            delta_alpha = np.clip(delta_alpha, -0.10, 0.10)
-            delta_beta = np.clip(delta_beta, -0.10, 0.10)
-            
-            # Validate business logic
+
+            # Sanity checks — correct directionally wrong proposals
             if len(recent_history) >= 3:
                 recent_revenue = [m.revenue_gain_pct for m in recent_history[-3:]]
-                recent_util = [m.u_actual for m in recent_history[-3:]]
-                
-                # Check directional correctness
+                recent_util    = [m.u_actual          for m in recent_history[-3:]]
                 if all(r < 0 for r in recent_revenue) and delta_eps > 0:
-                    logger.warning("LLM proposed increase ε during revenue decline, correcting")
-                    delta_eps = min(delta_eps, 0.0)
-                
+                    delta_eps = 0.0
                 if all(u > 0.80 for u in recent_util) and regime == "surge" and delta_alpha < 0:
-                    logger.warning("LLM proposed decrease α during high util, correcting")
-                    delta_alpha = max(delta_alpha, 0.0)
-            
+                    delta_alpha = 0.0
+
             return LearningUpdate(
                 delta_epsilon=delta_eps,
                 delta_alpha=delta_alpha,
                 delta_beta=delta_beta,
                 reward=reward,
                 revenue_gain_pct=revenue_gain_pct,
-                reflection=response.get("reflection", "LLM parameter adjustment")
+                reflection=response.get("reflection", "LLM parameter adjustment"),
             )
-            
+
         except Exception as e:
             logger.warning(f"LLM monitoring failed: {e}")
             return None
-    
-    def _deterministic_fallback(self, revenue_gain_pct: float, u_actual: float,
-                               regime: str, recent_history: List[StepMetrics],
-                               reward: float) -> LearningUpdate:
-        """Deterministic fallback for parameter updates."""
-    def _deterministic_fallback(self, step: int, revenue_gain_pct: float, u_actual: float,
-                               regime: str, recent_history: List[StepMetrics],
-                               reward: float, current_epsilon: float) -> LearningUpdate:
-        """
-        Deterministic fallback for parameter updates with regime-aware logic.
-        FIX 3: Regime-aware epsilon cooldown - only reduce in neutral, with 5-step cooldown.
-        """
-        
-        delta_eps, delta_alpha, delta_beta = 0.0, 0.0, 0.0
-        
+
+    def _deterministic_fallback(
+        self,
+        step: int,
+        revenue_gain_pct: float,
+        u_actual: float,
+        regime: str,
+        recent_history: List[StepMetrics],
+        reward: float,
+        current_epsilon: float,
+    ) -> LearningUpdate:
+        """Regime-aware rule-based parameter updates when LLM is unavailable."""
+        delta_eps = delta_alpha = delta_beta = 0.0
+
         if len(recent_history) >= 3:
-            recent_revenue = [m.revenue_gain_pct for m in recent_history[-3:]]
-            recent_util = [m.u_actual for m in recent_history[-3:]]
-            recent_regimes = [m.regime for m in recent_history[-3:]]
-            
-            # FIX 2: Epsilon reduction - ONLY in neutral regime, with cooldown AND floor
+            recent_revenue  = [m.revenue_gain_pct for m in recent_history[-3:]]
+            recent_regimes  = [m.regime           for m in recent_history[-3:]]
+
             if regime == "neutral":
-                # Check if cooldown period has passed (5 steps minimum)
                 cooldown_passed = (step - self.last_epsilon_reduction_step) >= 5
-                
-                # FIX 2: Add epsilon floor check - never reduce below 1.0
-                epsilon_above_floor = current_epsilon > 1.0
-                
-                if all(r < 0 for r in recent_revenue) and cooldown_passed and epsilon_above_floor:
+                if all(r < 0 for r in recent_revenue) and cooldown_passed:
                     delta_eps = -0.02
                     self.last_epsilon_reduction_step = step
-                    logger.info(f"Epsilon reduction triggered at step {step} (ε={current_epsilon:.3f} > 1.0)")
-                elif all(r < 0 for r in recent_revenue) and not cooldown_passed:
-                    logger.info(f"Epsilon reduction skipped: cooldown active (last at step {self.last_epsilon_reduction_step})")
-                elif all(r < 0 for r in recent_revenue) and not epsilon_above_floor:
-                    logger.info(f"Epsilon reduction skipped: floor reached (ε={current_epsilon:.3f} ≤ 1.0)")
-            else:
-                # FIX 3: NO epsilon reduction in surge/discount regimes
-                logger.debug(f"Epsilon reduction skipped: {regime} regime (only applies to neutral)")
-            
-            # Alpha: RELAXED - even a single surge step with high util triggers update
-            high_util_surge_count = sum(1 for u, r in zip(recent_util, recent_regimes) if u > 0.80 and r == "surge")
-            if high_util_surge_count >= 1:
+                elif all(r > 2.0 for r in recent_revenue):
+                    delta_eps = 0.01
+
+            if sum(1 for r in recent_regimes if r == "surge") >= 1 and all(r < 5.0 for r in recent_revenue):
                 delta_alpha = 0.05
-                logger.info(f"Alpha update triggered: {high_util_surge_count} surge step(s) with u>80%")
-            
-            # Beta: RELAXED - even a single discount step with low util triggers update
-            low_util_discount_count = sum(1 for u, r in zip(recent_util, recent_regimes) if u < 0.30 and r == "discount")
-            if low_util_discount_count >= 1:
+
+            if sum(1 for r in recent_regimes if r == "discount") >= 1 and all(r < 0 for r in recent_revenue):
                 delta_beta = 0.05
-                logger.info(f"Beta update triggered: {low_util_discount_count} discount step(s) with u<30%")
-        
+
         return LearningUpdate(
             delta_epsilon=delta_eps,
             delta_alpha=delta_alpha,
             delta_beta=delta_beta,
             reward=reward,
             revenue_gain_pct=revenue_gain_pct,
-            reflection="Deterministic adjustment based on recent patterns [FALLBACK]"
+            reflection="Deterministic fallback adjustment",
         )
-    
+
     def get_stats(self) -> dict:
-        """Get agent statistics."""
         total = self.llm_success_count + self.fallback_count
         llm_rate = (self.llm_success_count / total * 100) if total > 0 else 0
         return {
             "llm_success": self.llm_success_count,
             "fallback_used": self.fallback_count,
-            "llm_success_rate": llm_rate
+            "llm_success_rate": llm_rate,
         }
